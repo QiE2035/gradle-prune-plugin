@@ -325,11 +325,14 @@ still verified by hand against a real build.
   resolved through `settings` / `pluginManagement`, are missed unless
   `-Pprune.captureDownloads=true` is on. A miss costs a re-download, never a
   broken build.
-- **`Gradle.buildFinished` is deprecated** in Gradle 9. It is still the only
-  build-end hook that works from both a plain plugin and an init script, so it
-  is used deliberately (with the deprecation suppressed and documented in
-  `CaptureRegistrar`). Migration to `BuildEventsListenerRegistry` / `FlowScope`
-  is the tracked follow-up; until then, registration depends on that hook.
+- **`Gradle.buildFinished` is deprecated** in Gradle 9. It is used
+  deliberately, with the deprecation suppressed and reasoned about in
+  `CaptureRegistrar`: in 9.7.1 `GradleLifecycle` has no build-end hook, and
+  `FlowScope` / `BuildEventsListenerRegistry` only fire once the *work graph*
+  completes — a build that fails during **configuration** would never register
+  its already-resolved modules, which is precisely when the registry must stay
+  conservative. Registration depends on that one hook; `PruneTasksIntegrationTest`
+  would catch it breaking, so the migration can be done safely as a follow-up.
 - **The registry union only grows.** A build that stops using a module keeps
   its coordinate until its registry entry is removed (`--forget`, or deleting
   the file after removing the project). That is the conservative direction:

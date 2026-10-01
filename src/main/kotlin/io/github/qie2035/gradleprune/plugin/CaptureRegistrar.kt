@@ -106,12 +106,26 @@ class CaptureRegistrar(private val project: Project) {
     /**
      * Flushes the registry at the end of the build.
      *
-     * `Gradle.buildFinished` is deprecated in Gradle 9 (the replacement is a
-     * build service driven by `BuildEventsListenerRegistry` / `FlowScope`),
-     * but it is still the only build-end hook usable from both a plain plugin
-     * and the `prune.init.gradle.kts` init script without extra machinery. The
-     * deprecation is suppressed explicitly and tracked here and in the README
-     * so it cannot be lost silently.
+     * `Gradle.buildFinished` is deprecated in Gradle 9, but it is deliberately
+     * still used, and the deprecation is suppressed here rather than left to
+     * warn on every build. The alternatives in 9.7.1 were checked and are all
+     * worse for this purpose:
+     *
+     *  - `Gradle.getLifecycle()` (`GradleLifecycle`) only offers
+     *    `beforeProject`/`afterProject` — no build-end hook at all;
+     *  - `FlowScope.always(...)`, and a `BuildService` driven by
+     *    `BuildEventsListenerRegistry.onTaskCompletion(...)`, only run once the
+     *    **work graph** completes. A build that fails during *configuration*
+     *    never gets there — dropping the documented guarantee that a failing
+     *    build still registers its already-resolved modules, which is exactly
+     *    when the registry most needs to stay conservative. Both are also
+     *    `@Incubating`, and they want the coordinates to travel through a
+     *    configuration-time serializable parameter, which does not fit an
+     *    "accumulate while resolving, write at the end" design.
+     *
+     * So this is a tracked deferral, not an oversight (see the README's
+     * "Known limitations"): the hook is the single point registration depends
+     * on, and `PruneTasksIntegrationTest` would catch it breaking.
      */
     @Suppress("DEPRECATION")
     private fun registerFlush() {

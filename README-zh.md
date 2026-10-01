@@ -306,10 +306,13 @@ init script 这一半仍靠真实构建手工验证。
   metadata 而抓取、或经由 `settings` / `pluginManagement` 解析的模块会漏掉，
   除非打开 `-Pprune.captureDownloads=true`。漏掉的代价是重新下载，绝不会
   弄坏构建。
-- **`Gradle.buildFinished` 在 Gradle 9 已废弃**。它仍是唯一同时适用于普通
-  插件和 init script 的构建结束钩子，因此仍在使用（代码里显式抑制了该
-  弃用警告并注明原因）。迁移到 `BuildEventsListenerRegistry` / `FlowScope`
-  是已记录的后续工作；在那之前登记依赖这个钩子。
+- **`Gradle.buildFinished` 在 Gradle 9 已废弃**。这是有意保留的，代码里显式
+  抑制了弃用警告并在 `CaptureRegistrar` 里写明了理由：9.7.1 的
+  `GradleLifecycle` 根本没有构建结束钩子；`FlowScope` /
+  `BuildEventsListenerRegistry` 只在**任务图**跑完时触发——**配置阶段**就失败
+  的构建永远不会走到那里，而那恰恰是注册表最需要保持保守的场景（已解析的
+  模块必须留下来）。登记依赖这一个钩子，`PruneTasksIntegrationTest` 能在它
+  失效时立刻发现，所以迁移可以安全地作为后续工作单独进行。
 - **注册表并集只增不减**：某个构建不再使用某模块后，它的坐标会一直保留，
   直到手动移除该条目（`--forget`，或删掉项目后删文件）。这是保守方向：
   可能少删，绝不会多删。
