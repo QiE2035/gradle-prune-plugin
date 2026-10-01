@@ -155,14 +155,18 @@ gradle --stop
 
 Mechanics: the script's top-level `initscript {}` block puts the plugin jar
 (from `mavenLocal()`, transitive dependencies from `mavenCentral()`) on the
-init script's own classpath; the script loads the plugin class from there
-and applies it to every project. The plugin must be applied **by class**
-(plugin-id resolution does not consult the init script classpath) and the
-`initscript {}` block must stay at the **top** of the script — the file
-header lists the exact workarounds in detail. If the plugin cannot be
-resolved the script logs one warning and the build continues unaffected;
-the kill switch works exactly as above. Uninstall: remove the file +
-`gradle --stop` (the `~/.m2` publication can be deleted separately).
+init script's own classpath — so the plugin class is a normal compile-time
+reference in the script body (no reflection); the script applies it to
+every project **by class** via `pluginManager.apply(Class)`, because
+plugin-id resolution does not consult the init script classpath (and the
+KTS `apply(String)` extension would reject a Class argument). The
+`initscript {}` block must stay at the **top** of the script — that is the
+only place Gradle wires the init classpath. If the plugin artifact is
+missing (e.g. `publishToMavenLocal` was never run), every build fails at
+init with a clear dependency-resolution error — an intentional hard
+dependency; remove the file to back out. The kill switch works exactly as
+above. Uninstall: remove the file + `gradle --stop` (the `~/.m2`
+publication can be deleted separately).
 
 Both global mechanisms are safe to stack (the registry upsert is a
 conservative union merge), and neither can break the build: every hook is

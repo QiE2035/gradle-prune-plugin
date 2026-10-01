@@ -139,12 +139,15 @@ gradle --stop
 ```
 
 原理：脚本顶层的 `initscript {}` 块把插件 jar（来自 `mavenLocal()`，
-传递依赖来自 `mavenCentral()`）放进 init 脚本自己的 classpath，再从中
-加载插件类并 apply 到每个 project。插件必须**按类** apply（按 id 解析
-不看 init script 的 classpath），且 `initscript {}` 块必须留在脚本**顶部**
-——文件头注释详细列出了这两条及类型系统上的绕过。插件解析失败
-时脚本只打一条警告、构建照常进行；关闭开关与上面完全相同。卸载 = 删掉
-文件 + `gradle --stop`（`~/.m2` 里的发布产物可另行删除）。
+传递依赖来自 `mavenCentral()`）放进 init 脚本自己的 classpath——插件类
+在脚本体里就是普通的编译期引用（不需要反射）；脚本通过
+`pluginManager.apply(Class)` **按类** apply 到每个 project，因为按 id
+解析不看 init script 的 classpath（且 KTS 的 `apply(String)` 扩展会拒绝
+Class 实参）。`initscript {}` 块必须留在脚本**顶部**——只有那里 Gradle
+才会接上 init classpath。插件构件缺失（例如没跑过
+`publishToMavenLocal`）时，所有构建会在 init 阶段以清晰的依赖解析错误
+失败——有意的硬依赖，删掉该文件即可退出。关闭开关与上面完全相同。
+卸载 = 删掉文件 + `gradle --stop`（`~/.m2` 里的发布产物可另行删除）。
 
 **D. mtime 兜底采集**（代码内已备好，默认关闭，尚未接到任务上）：
 `MtimeDeltaCapture` 按构建期间 `files-2.1` 下新增/变动的目录反推模块坐标，
