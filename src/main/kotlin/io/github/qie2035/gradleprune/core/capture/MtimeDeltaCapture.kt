@@ -28,14 +28,26 @@ object MtimeDeltaCapture {
         for (group in safeListDirs(filesDir)) {
             for (name in safeListDirs(group)) {
                 for (version in safeListDirs(name)) {
+                    // Names the coordinate grammar rejects must not abort the
+                    // capture; the safety net has to be able to run on a cache
+                    // that contains the odd malformed directory.
+                    val coord = coordinateOf(group.name, name.name, version.name) ?: continue
                     if (lastModifiedOf(version) >= sinceEpochMs) {
-                        result += ModuleCoordinate(group.name, name.name, version.name)
+                        result += coord
                     }
                 }
             }
         }
         return result
     }
+
+    /** [ModuleCoordinate] for the three dir names, or null when malformed. */
+    private fun coordinateOf(group: String, name: String, version: String): ModuleCoordinate? =
+        try {
+            ModuleCoordinate(group, name, version)
+        } catch (e: IllegalArgumentException) {
+            null
+        }
 
     /**
      * The newest mtime of any file (recursively) or directory under [dir].

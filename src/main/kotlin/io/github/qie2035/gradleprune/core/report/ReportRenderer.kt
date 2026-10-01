@@ -86,19 +86,6 @@ object ReportRenderer {
         }
     }
 
-    /** Human-readable byte formatting (B/KB/MB/GB/TB). */
-    fun formatBytes(bytes: Long): String {
-        if (bytes < 1024) return "$bytes B"
-        var value = bytes.toDouble()
-        var unit = "B"
-        for (u in listOf("KB", "MB", "GB", "TB")) {
-            value /= 1024.0
-            if (value < 1024.0) {
-                unit = u
-                break
-            }
-        }
-        val s = if (value >= 100) value.toLong().toString() else "%.1f".format(value)
-        return "$s $unit"
-    }
+    /** Human-readable byte formatting (B/KB/MB/GB/TB/PB); see [formatBytes]. */
+    fun formatBytes(bytes: Long): String = io.github.qie2035.gradleprune.core.formatBytes(bytes)
 }

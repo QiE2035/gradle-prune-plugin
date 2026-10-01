@@ -27,13 +27,24 @@ object CacheScanner {
         for (group in safeListDirs(filesDir)) {
             for (name in safeListDirs(group)) {
                 for (version in safeListDirs(name)) {
-                    val coord = ModuleCoordinate(group.name, name.name, version.name)
+                    // A directory name the coordinate grammar rejects (e.g. a
+                    // stray `:` — legal in a Linux file name) must not abort
+                    // the whole scan; the rest of the cache is still scannable.
+                    val coord = coordinateOf(group.name, name.name, version.name) ?: continue
                     result[coord] = dirSize(version)
                 }
             }
         }
         return result
     }
+
+    /** [ModuleCoordinate] for the three dir names, or null when malformed. */
+    private fun coordinateOf(group: String, name: String, version: String): ModuleCoordinate? =
+        try {
+            ModuleCoordinate(group, name, version)
+        } catch (e: IllegalArgumentException) {
+            null
+        }
 
     private fun safeListDirs(dir: File): List<File> =
         dir.listFiles { f -> f.isDirectory }?.toList() ?: emptyList()

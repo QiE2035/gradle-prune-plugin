@@ -6,6 +6,7 @@ import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.core.main
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
+import com.github.ajalt.clikt.parameters.options.multiple
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.mordant.terminal.Terminal
 import com.github.ajalt.mordant.terminal.muted
@@ -33,6 +34,9 @@ import java.io.File
  *   - **dry-run by default** — nothing is deleted unless `--apply` is passed;
  *   - an **empty registry refuses** to delete anything unless `--all` (wipe
  *     everything) is passed;
+ *   - **unreadable registry files** are reported, and block `--apply` unless
+ *     `--force` is passed (a file we cannot parse may have referenced modules
+ *     that are about to look unused);
  *   - a **fresh `modules-2.lock` mtime** triggers a non-blocking warning
  *     (silenced by `--force`);
  *   - only the dependency cache is ever touched; `metadata-*`, `resources-*`,
@@ -50,16 +54,26 @@ class PruneCommand : CliktCommand(name = "gradle-prune") {
     private val apply by option("--apply", help = "Actually delete. Without this flag the run is a dry-run.")
         .flag()
 
-    /** Silences the active-lock warning. */
-    private val force by option("--force", help = "Proceed without the active-lock warning.")
-        .flag()
+    /** Silences the active-lock and unreadable-registry blocks. */
+    private val force by option(
+        "--force",
+        help = "Proceed despite a recently-touched build lock or unreadable registry files.",
+    ).flag()
 
     /** Delete everything, even when no build is registered (dangerous). */
-    private val all by option("--all", help = "Delete ALL cached modules even if no build is registered.")
-        .flag()
+    private val all by option(
+        "--all",
+        help = "Ignore the registry and delete EVERY cached module version (dangerous).",
+    ).flag()
 
     private val verbose by option("--verbose", "-v", help = "List every module to be deleted.")
         .flag()
+
+    /** Removes registry entries instead of pruning. */
+    private val forget by option(
+        "--forget",
+        help = "Remove the registry entry for this build root and exit (repeatable).",
+    ).multiple()
 
     private val registry by option("--registry", help = "Registry directory (default: \$GRADLE_USER_HOME/prune/registry).")
         .default("")
@@ -85,6 +99,12 @@ class PruneCommand : CliktCommand(name = "gradle-prune") {
         )
 
         val store = RegistryStore(paths.registryDir)
+
+        if (forget.isNotEmpty()) {
+            forgetEntries(terminal, store)
+            return
+        }
+
         val keep = store.union()
         val registered = store.all()
 
@@ -95,12 +115,37 @@ class PruneCommand : CliktCommand(name = "gradle-prune") {
             )
         }
 
+        // A registry file we cannot parse silently shrinks the keep-set, which
+        // makes modules look unused. Report it, and refuse to act on it unless
+        // the user explicitly overrides.
+        val unreadable = store.unreadable()
+        if (unreadable.isNotEmpty()) {
+            terminal.warning(
+                "${unreadable.size} registry file(s) could not be parsed and were ignored: " +
+                    unreadable.joinToString(", ") { it.name } +
+                    ". Modules only they referenced look unused and would be deleted " +
+                    "(the worst case is a re-download).",
+            )
+            if (apply && !force) {
+                terminal.warning(
+                    "Refusing to delete while unreadable registry files are present. " +
+                        "Fix or remove them, or pass --force to override.",
+                )
+                throw ProgramResult(1)
+            }
+        }
+
         if (keep.isEmpty() && !all) {
             terminal.warning(
                 "No builds are registered, so nothing can be pruned. " +
                     "Apply the `io.github.qie2035.gradle-prune` plugin to a project and build it, " +
                     "or pass --all to delete the entire module cache (dangerous).",
             )
+            return
+        }
+
+        if (!paths.filesDir.isDirectory) {
+            terminal.warning("No module cache found at ${paths.filesDir} — nothing to do.")
             return
         }
 
@@ -114,13 +159,8 @@ class PruneCommand : CliktCommand(name = "gradle-prune") {
             )
         }
 
-        if (!paths.filesDir.isDirectory) {
-            terminal.warning("No module cache found at ${paths.filesDir} — nothing to do.")
-            return
-        }
-
         val present = CacheScanner.scan(paths.filesDir)
-        val plan = PrunePlanner.plan(present, keep, allowEmptyKeepSet = all)
+        val plan = PrunePlanner.plan(present, keep, deleteAll = all)
         val executor = PruneExecutor(paths.filesDir)
         val result = executor.execute(plan, dryRun = !apply)
 
@@ -139,6 +179,41 @@ class PruneCommand : CliktCommand(name = "gradle-prune") {
         }
         if (apply && plan.toDelete.isNotEmpty()) {
             terminal.success("Done.")
+        }
+    }
+
+    /**
+     * Handles `--forget <buildRoot>`: drops the registry entries for the given
+     * build roots (the "the project is gone" case) instead of pruning.
+     *
+     * The path is matched against the *stored* build root, so it is tolerant
+     * of a trailing slash or a relative path — it is not a raw file-name
+     * lookup, which would silently do nothing for any path spelling that
+     * differs from the one the build registered. The file that was actually
+     * read is the one deleted, so a renamed entry still goes away.
+     */
+    private fun forgetEntries(terminal: Terminal, store: RegistryStore) {
+        val entries = store.entries()
+        var failed = false
+        for (raw in forget) {
+            val target = File(raw).absolutePath
+            val match = entries.firstOrNull {
+                it.registry.buildRoot == target || it.registry.buildRoot == raw
+            }
+            when {
+                match == null -> {
+                    terminal.warning("No registry entry for $raw — nothing removed.")
+                    failed = true
+                }
+                match.file.delete() -> terminal.success("Forgot ${match.registry.buildRoot}.")
+                else -> {
+                    terminal.warning("Could not remove ${match.file.path}.")
+                    failed = true
+                }
+            }
+        }
+        if (failed) {
+            throw ProgramResult(1)
         }
     }
 }

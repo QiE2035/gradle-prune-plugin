@@ -3,6 +3,8 @@ package io.github.qie2035.gradleprune.core.prune
 import io.github.qie2035.gradleprune.core.ModuleCoordinate
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 
 /**
  * Executes a [PrunePlan] against the real `files-2.1` tree: deletes the
@@ -82,12 +84,24 @@ class PruneExecutor(private val filesDir: File) {
     }
 
     private fun isEmptyDir(dir: File): Boolean =
-        dir.isDirectory && dir.listFiles().isNullOrEmpty()
+        dir.isDirectory &&
+            !Files.isSymbolicLink(dir.toPath()) &&
+            dir.listFiles().isNullOrEmpty()
 
-    /** Bottom-up recursive delete. Throws [IOException] on the first failure. */
+    /**
+     * Bottom-up recursive delete. Throws [IOException] on the first failure.
+     *
+     * Symlinks are deleted as links and never descended into: `File.isDirectory`
+     * follows them, so a symlinked version directory would otherwise have its
+     * *target's* contents deleted. `CacheScanner.dirSize` walks with
+     * `Files.walk` (no `FOLLOW_LINKS`), so it already treats symlinks as leaves
+     * — this keeps deletion and size accounting consistent.
+     */
     private fun deleteRecursively(dir: File) {
-        if (!dir.exists()) return
-        if (dir.isDirectory) {
+        val path = dir.toPath()
+        // NOFOLLOW_LINKS so a *dangling* symlink is still cleaned up.
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) return
+        if (dir.isDirectory && !Files.isSymbolicLink(path)) {
             dir.listFiles()?.forEach { deleteRecursively(it) }
         }
         if (!dir.delete()) {

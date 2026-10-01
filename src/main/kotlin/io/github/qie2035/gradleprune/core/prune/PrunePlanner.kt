@@ -17,19 +17,25 @@ object PrunePlanner {
      *
      * @param present `coordinate -> bytes` for every `g/n/v` on disk.
      * @param keep the keep-set (union of all registered builds).
-     * @param allowEmptyKeepSet when true an empty keep-set means "delete
-     *   everything" (the `--all` escape hatch); when false (the default) an
-     *   empty keep-set deletes nothing and reports [PrunePlan.keepSetEmpty].
+     * @param deleteAll when true the keep-set is ignored entirely and every
+     *   present module is deleted — the `--all` / `-Pprune.modules.all=true`
+     *   escape hatch. When false (the default) an *empty* keep-set means
+     *   "we have no idea what is used", so nothing is deleted and
+     *   [PrunePlan.keepSetEmpty] is reported instead.
      */
     fun plan(
         present: Map<ModuleCoordinate, Long>,
         keep: Set<ModuleCoordinate>,
-        allowEmptyKeepSet: Boolean,
+        deleteAll: Boolean,
     ): PrunePlan {
         val keepIsEmpty = keep.isEmpty()
-        // By default an empty keep-set is "we have no idea what is used" and
-        // we refuse to delete anything. Only --all opts into wiping.
-        val effectiveKeep = if (keepIsEmpty && !allowEmptyKeepSet) present.keys else keep
+        val effectiveKeep = when {
+            // --all: ignore the registry completely, wipe the whole cache.
+            deleteAll -> emptySet()
+            // Nothing registered: refuse rather than guess, unless --all.
+            keepIsEmpty -> present.keys
+            else -> keep
+        }
 
         val keepMap = present.filterKeys { it in effectiveKeep }
         val deleteMap = present.filterKeys { it !in effectiveKeep }

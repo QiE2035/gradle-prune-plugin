@@ -44,7 +44,7 @@ class PruneExecutorTest {
         val root = createTempDirectory("exec").toFile()
         val files = File(root, "files-2.1")
         val present = makeCache(files, c("keep", "me", "1.0"), c("delete", "me", "2.0"))
-        val plan = PrunePlanner.plan(present, setOf(c("keep", "me", "1.0")), allowEmptyKeepSet = false)
+        val plan = PrunePlanner.plan(present, setOf(c("keep", "me", "1.0")), deleteAll = false)
 
         val result = PruneExecutor(files).execute(plan, dryRun = false)
         assertTrue(result.success)
@@ -66,7 +66,7 @@ class PruneExecutorTest {
         val root = createTempDirectory("exec2").toFile()
         val files = File(root, "files-2.1")
         val present = makeCache(files, c("lonely", "group", "1.0"))
-        val plan = PrunePlanner.plan(present, emptySet(), allowEmptyKeepSet = true)
+        val plan = PrunePlanner.plan(present, emptySet(), deleteAll = true)
         PruneExecutor(files).execute(plan, dryRun = false)
         assertFalse(File(files, "lonely").exists())
     }
@@ -76,11 +76,56 @@ class PruneExecutorTest {
         val root = createTempDirectory("exec3").toFile()
         val files = File(root, "files-2.1")
         val present = makeCache(files, c("g", "n", "1"))
-        val plan = PrunePlanner.plan(present, emptySet(), allowEmptyKeepSet = true)
+        val plan = PrunePlanner.plan(present, emptySet(), deleteAll = true)
         val result = PruneExecutor(files).execute(plan, dryRun = true)
         assertTrue(result.dryRun)
         assertEquals(0L, result.deletedBytes)
         assertTrue(result.deletedModules.isEmpty())
         assertTrue(File(File(File(files, "g"), "n"), "1").exists())
+    }
+
+    /**
+     * A directory name the coordinate grammar rejects must be skipped rather
+     * than aborting the whole scan (a `:` is legal in a Linux file name).
+     */
+    @Test
+    fun `scanner skips malformed directory names instead of throwing`() {
+        val root = createTempDirectory("scan-bad").toFile()
+        val files = File(root, "files-2.1")
+        val expected = makeCache(files, c("g", "n", "1.0"))
+        File(File(File(files, "g"), "n"), "bad:version").mkdirs()
+
+        assertEquals(expected, CacheScanner.scan(files))
+    }
+
+    /**
+     * A symlinked version directory must be unlinked, never followed: the
+     * linked target's contents belong to someone else.
+     */
+    @Test
+    fun `executor unlinks a symlinked version dir without deleting its target`() {
+        val root = createTempDirectory("exec-link").toFile()
+        val files = File(root, "files-2.1")
+        val outside = File(root, "outside").apply { mkdirs() }
+        val precious = File(outside, "keep.txt").apply { writeText("keep me") }
+
+        val nameDir = File(File(files, "g"), "n").apply { mkdirs() }
+        val link = File(nameDir, "1.0")
+        try {
+            java.nio.file.Files.createSymbolicLink(link.toPath(), outside.toPath())
+        } catch (e: Exception) {
+            return // Filesystem without symlink support (e.g. Windows w/o privilege).
+        }
+
+        val plan = PrunePlanner.plan(
+            CacheScanner.scan(files),
+            emptySet(),
+            deleteAll = true,
+        )
+        PruneExecutor(files).execute(plan, dryRun = false)
+
+        assertFalse(link.exists())
+        assertTrue(precious.isFile, "the symlink target's contents must survive")
+        assertEquals("keep me", precious.readText())
     }
 }

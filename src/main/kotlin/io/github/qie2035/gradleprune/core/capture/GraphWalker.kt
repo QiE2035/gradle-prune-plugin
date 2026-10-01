@@ -15,13 +15,17 @@ import org.gradle.api.artifacts.result.ResolvedDependencyResult
  * artifacts that are not regular modules are skipped. This is what makes the
  * registry the "keep set": the union of modules the build actually used.
  *
+ * The coordinate is read straight off the component id
+ * (`id.group` / `id.module` / `id.version`) rather than from
+ * `ResolvedComponentResult.getModuleVersion()`, which throws for components
+ * that are not external modules.
+ *
  * Verified against Gradle 9.7.1:
  *  - `ResolutionResult.getAllDependencies(): Set<out DependencyResult>` —
  *    flat view over the whole graph, including the root dependency.
  *  - `ResolvedDependencyResult.getSelected(): ResolvedComponentResult`
- *  - `ResolvedComponentResult.getModuleVersion()` is only safe to call when
- *    the component id is a [ModuleComponentIdentifier] (project components
- *    throw), so we gate on the id type.
+ *  - `ResolvedComponentResult.getId(): ComponentIdentifier` is the only
+ *    member that is safe to call for every component.
  */
 object GraphWalker {
 

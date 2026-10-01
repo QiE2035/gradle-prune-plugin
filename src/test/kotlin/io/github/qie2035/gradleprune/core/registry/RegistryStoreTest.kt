@@ -5,6 +5,7 @@ import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -88,6 +89,22 @@ class RegistryStoreTest {
         assertEquals(12, fa.name.removeSuffix(".json").length)
     }
 
+    /**
+     * `entries()` hands back the file each entry was read from, so `--forget`
+     * can delete it even when its name does not match the build root's hash.
+     */
+    @Test
+    fun `entries reports the file behind each entry`() {
+        val s = store()
+        s.upsert("/proj/a", modules = setOf(c("g1", "n1", "1.0")))
+        s.upsert("/proj/b", modules = setOf(c("g2", "n2", "2.0")))
+
+        val entries = s.entries().sortedBy { it.registry.buildRoot }
+        assertEquals(listOf("/proj/a", "/proj/b"), entries.map { it.registry.buildRoot })
+        assertTrue(entries.all { it.file.isFile })
+        assertEquals(s.fileFor("/proj/a"), entries[0].file)
+    }
+
     @Test
     fun `corrupt file is ignored by all and union`() {
         val s = store()
@@ -95,5 +112,37 @@ class RegistryStoreTest {
         File(s.registryDir, s.fileFor("/proj/a").name).writeText("not json {")
         assertTrue(s.all().isEmpty())
         assertTrue(s.union().isEmpty())
+    }
+
+    @Test
+    fun `corrupt files are reported by unreadable so callers can refuse`() {
+        val s = store()
+        s.upsert("/proj/a", modules = setOf(c("g1", "n1", "1.0")))
+        assertEquals(emptyList(), s.unreadable())
+
+        val corrupt = File(s.registryDir, s.fileFor("/proj/b").name)
+        corrupt.writeText("not json {")
+        assertEquals(listOf(corrupt.name), s.unreadable().map { it.name })
+        // The good entry is still usable; only the bad one is flagged.
+        assertEquals(1, s.all().size)
+    }
+
+    /**
+     * Overwriting an unparseable entry would silently drop every coordinate it
+     * held, so `upsert` must refuse rather than lose them.
+     */
+    @Test
+    fun `upsert refuses to overwrite an unreadable entry`() {
+        val s = store()
+        s.upsert("/proj/a", modules = setOf(c("g1", "n1", "1.0")))
+        val file = File(s.registryDir, s.fileFor("/proj/a").name)
+        file.writeText("not json {")
+
+        val failure = assertFailsWith<IllegalStateException> {
+            s.upsert("/proj/a", modules = setOf(c("g2", "n2", "2.0")))
+        }
+        assertTrue(failure.message!!.contains("cannot be parsed"))
+        // The original bytes are untouched, so the damage stays detectable.
+        assertEquals("not json {", file.readText())
     }
 }

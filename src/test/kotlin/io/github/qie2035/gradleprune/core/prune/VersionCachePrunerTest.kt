@@ -4,6 +4,7 @@ import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class VersionCachePrunerTest {
@@ -71,5 +72,42 @@ class VersionCachePrunerTest {
     @Test
     fun `dirSize of missing dir is zero`() {
         assertEquals(0L, VersionCachePruner.dirSize(File("/nope/nothing")))
+    }
+
+    @Test
+    fun `delete removes a directory and reports success`() {
+        val root = createTempDirectory("del").toFile()
+        val dir = File(root, "8.5").apply { mkdirs() }
+        File(dir, "f.bin").writeBytes(ByteArray(8))
+
+        assertTrue(VersionCachePruner.delete(dir))
+        assertFalse(dir.exists())
+        // Idempotent: deleting something already gone is still success.
+        assertTrue(VersionCachePruner.delete(dir))
+    }
+
+    /**
+     * `File.deleteRecursively()` reports failure by returning `false` — it
+     * never throws — so [VersionCachePruner.delete] must inspect the result.
+     * The task used to wrap it in try/catch and count every failure as freed
+     * bytes.
+     */
+    @Test
+    fun `delete reports false when the directory cannot be removed`() {
+        val parent = createTempDirectory("del-ro").toFile()
+        val dir = File(parent, "8.5").apply { mkdirs() }
+        File(dir, "f.bin").writeBytes(ByteArray(8))
+
+        parent.setWritable(false)
+        try {
+            // Running as root ignores the permission bit; nothing to assert.
+            if (!parent.canWrite()) {
+                assertFalse(VersionCachePruner.delete(dir))
+                assertTrue(dir.exists())
+            }
+        } finally {
+            parent.setWritable(true)
+        }
+        assertTrue(VersionCachePruner.delete(dir))
     }
 }

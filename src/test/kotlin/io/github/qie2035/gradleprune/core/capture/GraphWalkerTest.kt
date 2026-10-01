@@ -7,6 +7,7 @@ import org.gradle.api.artifacts.ModuleVersionIdentifier
 import org.gradle.api.artifacts.component.ComponentIdentifier
 import org.gradle.api.artifacts.component.ComponentSelector
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.ComponentSelectionDescriptor
 import org.gradle.api.artifacts.result.ComponentSelectionReason
 import org.gradle.api.artifacts.result.DependencyResult
 import org.gradle.api.artifacts.result.ResolutionResult
@@ -45,7 +46,7 @@ class GraphWalkerTest {
         override fun isExpected(): Boolean = true
         override fun isCompositeSubstitution(): Boolean = false
         override fun isConstrained(): Boolean = false
-        override fun getDescriptions(): List<out org.gradle.api.artifacts.result.ComponentSelectionDescriptor> =
+        override fun getDescriptions(): List<ComponentSelectionDescriptor> =
             emptyList()
     }
 
@@ -92,8 +93,8 @@ class GraphWalkerTest {
         override fun getId(): ComponentIdentifier = id
         override fun getModuleVersion(): ModuleVersionIdentifier =
             checkNotNull(mvi) { "module version not available for $id" }
-        override fun getDependencies(): Set<out DependencyResult> = emptySet()
-        override fun getDependents(): Set<out ResolvedDependencyResult> = emptySet()
+        override fun getDependencies(): Set<DependencyResult> = emptySet()
+        override fun getDependents(): Set<ResolvedDependencyResult> = emptySet()
         override fun getSelectionReason(): ComponentSelectionReason = FakeSelectionReason()
         override fun getVariants(): List<ResolvedVariantResult> = emptyList()
         override fun getDependenciesForVariant(variant: ResolvedVariantResult): List<DependencyResult> =
@@ -119,7 +120,7 @@ class GraphWalkerTest {
             unsupported()
         override fun getRootVariant(): org.gradle.api.provider.Provider<ResolvedVariantResult> =
             unsupported()
-        override fun getAllDependencies(): Set<out DependencyResult> = deps.toSet()
+        override fun getAllDependencies(): Set<DependencyResult> = deps.toSet()
         override fun allDependencies(action: org.gradle.api.Action<in DependencyResult>) {
             deps.forEach(action::execute)
         }
@@ -127,7 +128,7 @@ class GraphWalkerTest {
         override fun getAllComponents(): Set<ResolvedComponentResult> =
             deps.filterIsInstance<ResolvedDependencyResult>().map { it.selected }.toSet() + root
         override fun allComponents(action: org.gradle.api.Action<in ResolvedComponentResult>) {
-            Unit
+            // Only the getAllDependencies() path is exercised by the walker.
         }
         override fun allComponents(closure: Closure<*>) = unsupported<Unit>()
         override fun getRequestedAttributes(): org.gradle.api.attributes.AttributeContainer =

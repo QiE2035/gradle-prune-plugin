@@ -48,4 +48,19 @@ object VersionCachePruner {
         }
         return total
     }
+
+    /**
+     * Deletes [dir] recursively, reporting whether it is really gone.
+     *
+     * `File.deleteRecursively()` signals failure by **returning `false`** — it
+     * does not throw — so a `try { … } catch` around it silently counts failed
+     * deletions as successes. Callers must branch on this result instead.
+     *
+     * A directory that is already absent counts as success (idempotent).
+     */
+    fun delete(dir: File): Boolean {
+        if (!dir.exists()) return true
+        dir.deleteRecursively()
+        return !dir.exists()
+    }
 }

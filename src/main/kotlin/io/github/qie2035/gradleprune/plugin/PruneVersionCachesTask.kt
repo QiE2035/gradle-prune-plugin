@@ -1,6 +1,7 @@
 package io.github.qie2035.gradleprune.plugin
 
 import io.github.qie2035.gradleprune.core.CachePaths
+import io.github.qie2035.gradleprune.core.formatBytes
 import io.github.qie2035.gradleprune.core.prune.VersionCachePruner
 import org.gradle.api.DefaultTask
 import org.gradle.api.tasks.Input
@@ -54,9 +55,17 @@ abstract class PruneVersionCachesTask : DefaultTask() {
     @get:Optional
     var cachesDir: String? = null
 
+    /**
+     * The Gradle user home of the running build, set by [GradlePrunePlugin].
+     * See [PruneGradleCacheTask.gradleUserHome] for why this is not read from
+     * the `GRADLE_USER_HOME` environment variable.
+     */
+    @get:Internal
+    var gradleUserHome: File? = null
+
     @TaskAction
     fun prune() {
-        val paths = CachePaths.from()
+        val paths = CachePaths.from(gradleUserHome = gradleUserHome)
         val caches = File(cachesDir ?: File(paths.gradleUserHome, "caches").absolutePath)
         val candidates = VersionCachePruner.candidates(caches, gradleVersion)
 
@@ -72,10 +81,10 @@ abstract class PruneVersionCachesTask : DefaultTask() {
             val totalBytes = candidates.sumOf { VersionCachePruner.dirSize(it) }
             logger.lifecycle(
                 "gradle-prune (dry-run): would delete ${candidates.size} stale version " +
-                    "directory(ies), ${formatBytesHuman(totalBytes)}:",
+                    "directory(ies), ${formatBytes(totalBytes)}:",
             )
             candidates.forEach {
-                logger.lifecycle("  ${it.name} (${formatBytesHuman(VersionCachePruner.dirSize(it))})")
+                logger.lifecycle("  ${it.name} (${formatBytes(VersionCachePruner.dirSize(it))})")
             }
             logger.lifecycle("Re-run with -Pprune.versions.dryRun=false to actually delete.")
         } else {
@@ -84,17 +93,18 @@ abstract class PruneVersionCachesTask : DefaultTask() {
             val failed = mutableListOf<String>()
             for (dir in candidates) {
                 val size = VersionCachePruner.dirSize(dir)
-                try {
-                    dir.deleteRecursively()
+                // `deleteRecursively()` reports failure by returning false; it
+                // never throws, so the result must be checked explicitly.
+                if (VersionCachePruner.delete(dir)) {
                     freed += size
                     deleted++
-                } catch (e: Exception) {
-                    failed += "${dir.name} (${e.message})"
+                } else {
+                    failed += "${dir.name} (still present after delete; check permissions)"
                 }
             }
             logger.lifecycle(
                 "gradle-prune: deleted $deleted stale version directory(ies), " +
-                    "freed ${formatBytesHuman(freed)}.",
+                    "freed ${formatBytes(freed)}.",
             )
             failed.forEach { logger.warn("gradle-prune: failed to delete: $it") }
         }
