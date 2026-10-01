@@ -12,6 +12,7 @@ import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 import java.io.File
 
 /**
@@ -27,6 +28,12 @@ import java.io.File
  * Defaults mirror the CLI: dry-run, refuse on empty registry, warn on a live
  * cache lock.
  */
+// Not cacheable: it deletes from the shared on-disk module cache based on
+// registry files and cache state that are not trackable task inputs — the
+// task must always run against the current state of the cache.
+@DisableCachingByDefault(
+    because = "prunes the shared on-disk module cache; the cache state is not a trackable input",
+)
 abstract class PruneGradleCacheTask : DefaultTask() {
 
     init {

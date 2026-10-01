@@ -7,6 +7,7 @@ import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
 import java.io.File
 
 /**
@@ -27,6 +28,11 @@ import java.io.File
  * Registered by [GradlePrunePlugin] on the root project as
  * `gradlePruneVersionCaches`.
  */
+// Not cacheable: it deletes version-named directories under the Gradle user
+// home at execution time; the directory state is not a trackable input.
+@DisableCachingByDefault(
+    because = "deletes directories under the Gradle user home; the directory state is not a trackable input",
+)
 abstract class PruneVersionCachesTask : DefaultTask() {
 
     init {
