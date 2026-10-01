@@ -90,6 +90,14 @@ gradle -I /path/to/prune-init.gradle build
 # 可选: -Dgradle.prune.registry.dir=/some/dir 覆盖注册表位置
 ```
 
+功能完全相同的 Kotlin DSL 版本随仓库提供：
+[`prune-init.gradle.kts`](prune-init.gradle.kts)。两者登记内容逐字节等价
+（实测同一构建各登记 23 个模块、集合相同）。Groovy 版仍是默认推荐，因为
+Gradle 的回调 API 是 Groovy-Closure-first 的，Kotlin 版需要显式 `Action`
+SAM 类型和若干 receiver/属性技巧才能通过编译——完整列表见
+`prune-init.gradle.kts` 的文件头注释。只有当你的生态是纯 Kotlin 时才建议
+用 `.kts` 版。
+
 **C. mtime 兜底采集**（代码内已备好，默认关闭，尚未接到任务上）：
 `MtimeDeltaCapture` 按构建期间 `files-2.1` 下新增/变动的目录反推模块坐标，
 可覆盖"下载了但不出现在 `ResolutionResult` 里"的文件（例如某些
@@ -229,6 +237,8 @@ src/main/kotlin/io/github/qie2035/gradleprune/
     CaptureRegistrar.kt      钩住 buildFinished → 注册表 upsert
     PruneGradleCacheTask.kt  gradlePruneModules
     PruneVersionCachesTask.kt gradlePruneVersionCaches
-prune-init.gradle            -I init-script 登记（无需插件）
+prune-init.gradle            -I init-script 登记，Groovy（默认推荐）
+prune-init.gradle.kts        -I init-script 登记，Kotlin DSL
+                             （等价；头注释列出编译所需的工作区技巧）
 README.md                    英文说明
 ```

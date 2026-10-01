@@ -101,6 +101,15 @@ gradle -I /path/to/prune-init.gradle build
 # optional: -Dgradle.prune.registry.dir=/some/dir overrides the registry location
 ```
 
+A functionally identical Kotlin-DSL variant ships as
+[`prune-init.gradle.kts`](prune-init.gradle.kts). Both are byte-for-byte
+equivalent in what they register (verified: same 23-module set on a real
+build); the Groovy file stays the default because Gradle's callback APIs are
+Groovy-Closure-first, so the Kotlin variant needs explicit `Action` SAM types
+and a few receiver/property workarounds — see the header of
+`prune-init.gradle.kts` for the exact list. Pick the `.kts` one only if your
+ecosystem is Kotlin-only.
+
 Both mechanisms are safe to stack (the registry upsert is a conservative
 union merge), and an init script cannot break the build: every hook is
 wrapped in try/catch and only logs.
@@ -232,6 +241,8 @@ src/main/kotlin/io/github/qie2035/gradleprune/
     CaptureRegistrar.kt      hooks buildFinished → registry upsert
     PruneGradleCacheTask.kt  gradlePruneModules
     PruneVersionCachesTask.kt gradlePruneVersionCaches
-prune-init.gradle            -I init-script registration (no plugin needed)
+prune-init.gradle            -I init-script registration, Groovy (default)
+prune-init.gradle.kts        -I init-script registration, Kotlin DSL
+                             (equivalent; see its header for workarounds)
 README-zh.md                 中文说明
 ```

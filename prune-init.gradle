@@ -20,9 +20,11 @@
  *   gradle -I /path/to/prune-init.gradle build \
  *        -Dgradle.prune.registry.dir=/custom/registry/dir
  *
- * The init script is Groovy on purpose: Kotlin init scripts get compiled in a
- * restricted environment where the Gradle `tasks`/`configurations` receivers
- * are not available.
+ * A Kotlin-DSL variant with identical behaviour exists as prune-init.gradle.kts
+ * (its header lists the compiler workarounds it needs — Gradle's callback APIs
+ * are Groovy-Closure-first, so Kotlin must use explicit Action SAM types and a
+ * few receiver/property tricks). Groovy stays the default because it needs no
+ * such workarounds.
  */
 
 // Shared state: coordinates seen so far in this build (script-scoped).
