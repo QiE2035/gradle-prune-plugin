@@ -3,6 +3,7 @@ plugins {
     kotlin("plugin.serialization") version "2.4.20"
     `java-gradle-plugin`
     `application`
+    `maven-publish`
 }
 
 group = "io.github.qie2035"
@@ -37,3 +38,6 @@ gradlePlugin {
 tasks.test {
     useJUnitPlatform()
 }
+
+// maven-publish + java (via java-gradle-plugin) auto-creates a `mavenJava`
+// publication; consumed by prune-global-init.gradle via mavenLocal().
