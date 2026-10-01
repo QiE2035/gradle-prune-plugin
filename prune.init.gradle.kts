@@ -7,8 +7,16 @@
 //   - merges the collected group:name:version coordinates into
 //     <registryDir>/<sha1(buildRoot)[0..11]>.json at buildFinished
 //     (success or failure), conservatively: union of modules, max lastSeen,
-//     atomic temp-file + rename;
+//     atomic temp-file + rename — byte-for-byte the same contract as the
+//     plugin's RegistryStore.upsert;
+//   - an existing entry that cannot be parsed is left untouched (and warned
+//     about) rather than overwritten, so its coordinates are never silently
+//     dropped; the CLI and the prune tasks refuse to delete while such a file
+//     exists;
 //   - never breaks the build: every hook is try/catch-ed, failures only log.
+//
+// Progress is logged at debug level (visible with `gradle -i`/`--debug`), like
+// the plugin, so a global install does not print a line into every build.
 //
 // Usage:
 //   gradle -I /path/to/prune.init.gradle.kts build
@@ -75,6 +83,12 @@ val pruneEnabled = !(
         System.getProperty("gradle.prune.skip")?.lowercase() in listOf("true", "1")
 )
 
+// `logger` is not resolvable from this script's top-level scope (and
+// `g.logger` is not either), so go through Gradle's static logger factory.
+// Like the plugin, we only log at debug level: a global install must not
+// print a line into every build.
+val pruneLogger = org.gradle.api.logging.Logging.getLogger("gradle-prune")
+
 val capture = Action<ResolvableDependencies> {
     if (!pruneEnabled) return@Action
     try {
@@ -101,6 +115,9 @@ if (pruneEnabled) {
 
 fun sha1Hex(s: String): String = MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
+/** Minimal JSON string escaping for the fields we write. */
+fun escJson(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
+
 g.buildFinished(Action {
     if (!pruneEnabled) return@Action
     try {
@@ -108,14 +125,51 @@ g.buildFinished(Action {
         val buildRoot = rootProject.projectDir.absolutePath
         val dir = File(System.getProperty("gradle.prune.registry.dir") ?: g.gradleUserHomeDir.path + "/prune/registry").toPath()
         dir.createDirectories()
-        val target = dir.resolve(sha1Hex(buildRoot).take(12) + ".json")
-        val esc = { s: String -> s.replace("\\", "\\\\").replace("\"", "\\\"") }
-        val json = """{"buildRoot":"${esc(buildRoot)}","lastSeen":${System.currentTimeMillis()},"gradleVersion":"${esc(g.gradleVersion)}","modules":[${resolvedModules.joinToString(",") { "\"${esc(it)}\"" }}]}"""
-        val tmp = dir.resolve(sha1Hex(buildRoot).take(12) + ".json.tmp")
+        val base = sha1Hex(buildRoot).take(12)
+        val target = dir.resolve("$base.json")
+
+        // Merge with the existing entry instead of replacing it — the same
+        // contract as the plugin's RegistryStore.upsert (union of modules,
+        // max lastSeen). Overwriting would let a light build shrink the
+        // keep-set — `help` resolves far fewer modules than `build` — and the
+        // next prune would then delete modules a registered build still needs.
+        //
+        // Parsed with Groovy's JsonSlurper (Gradle's own Groovy is on the init
+        // script classpath), which reads both this script's single-line output
+        // and the plugin's pretty-printed format.
+        val merged = linkedSetOf<String>()
+        var lastSeen = System.currentTimeMillis()
+        var gradleVersion = g.gradleVersion
+        if (target.toFile().isFile) {
+            val existing = try {
+                groovy.json.JsonSlurper().parse(target.toFile()) as? Map<*, *>
+            } catch (t: Throwable) {
+                // Never overwrite an entry we cannot read: that would silently
+                // drop every coordinate it held. Leave it for the operator.
+                pruneLogger.warn(
+                    "gradle-prune(kts): registry file $target is unreadable; leaving it untouched: ${t.message}"
+                )
+                return@Action
+            }
+            if (existing != null) {
+                (existing["modules"] as? Collection<*>)?.forEach { m -> if (m != null) merged.add(m.toString()) }
+                (existing["lastSeen"] as? Number)?.let { lastSeen = maxOf(lastSeen, it.toLong()) }
+                (existing["gradleVersion"] as? String)?.takeIf { it.isNotBlank() }?.let { gradleVersion = it }
+            }
+        }
+        merged.addAll(resolvedModules)
+
+        val json = """{"buildRoot":"${escJson(buildRoot)}","lastSeen":$lastSeen,"gradleVersion":"${escJson(gradleVersion)}","modules":[${merged.joinToString(",") { "\"${escJson(it)}\"" }}]}"""
+        // Per-process temp name: two builds of the same root must not share a
+        // staging file before the atomic rename.
+        val tmp = dir.resolve("$base.json.tmp-${ProcessHandle.current().pid()}")
         tmp.writeText(json)
         tmp.moveTo(target, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-        println("gradle-prune(kts): recorded ${resolvedModules.size} modules for $buildRoot")
+        pruneLogger.debug(
+            "gradle-prune(kts): recorded ${merged.size} modules for $buildRoot " +
+                "(${resolvedModules.size} from this build)"
+        )
     } catch (t: Throwable) {
-        println("gradle-prune(kts): failed: ${t.message}")
+        pruneLogger.warn("gradle-prune(kts): failed to record modules: ${t.message}")
     }
 })
