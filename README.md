@@ -307,13 +307,16 @@ the next build re-registers itself; an empty union refuses to prune unless
 gradle build
 ```
 
-55 unit tests cover the registry store, scanner/planner/executor, lock
-guard, version-cache pruner, mtime-delta capture, coordinate parsing and the
-resolution-graph walker (against faked Gradle API types). The test suite is
-driven by the **system `gradle`** command — run `gradle build` (the template's
-`gradlew` wrapper, if present, is not used). The plugin/init-script halves are
-exercised by hand against a real build; there is no automated integration test
-for them yet.
+60 tests: 55 unit tests cover the registry store, scanner/planner/executor,
+lock guard, version-cache pruner, mtime-delta capture, coordinate parsing and
+the resolution-graph walker (against faked Gradle API types), and 5 TestKit
+tests drive the real plugin through a real Gradle build —
+`PruneTasksIntegrationTest` covers registration from a resolved configuration,
+`--all`, the default dry-run and the unreadable-registry refusal, all offline.
+
+The suite is driven by the **system `gradle`** command — run `gradle build`
+(the template's `gradlew` wrapper, if present, is not used). The init script is
+still verified by hand against a real build.
 
 ## Known limitations
 

@@ -291,10 +291,14 @@ gradle-prune --forget /abs/build/root      # 可重复
 gradle build
 ```
 
-55 个单元测试覆盖：注册表存储、扫描/计划/执行器、锁守卫、版本缓存清理器、
-mtime 差量采集、坐标解析、resolution 图遍历（对 Gradle API 类型打桩）。
+共 60 个测试：55 个单元测试覆盖注册表存储、扫描/计划/执行器、锁守卫、
+版本缓存清理器、mtime 差量采集、坐标解析、resolution 图遍历（对 Gradle API
+类型打桩）；另有 5 个 TestKit 测试在**真实 Gradle 构建**里驱动插件 ——
+`PruneTasksIntegrationTest` 覆盖"从已解析配置登记模块""`--all`""默认干跑"
+"注册表文件不可解析时拒绝删除"，全部离线运行。
+
 测试套件用**系统 `gradle`** 驱动（模板自带的 `gradlew` wrapper 不使用）。
-插件 / init script 这两半目前靠真实构建手工验证，还没有自动化集成测试。
+init script 这一半仍靠真实构建手工验证。
 
 ## 已知限制
 

@@ -18,6 +18,10 @@ dependencies {
     implementation("com.github.ajalt.mordant:mordant:3.1.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     testImplementation(kotlin("test"))
+    // Drives the plugin through a real Gradle build: the half of the codebase
+    // (plugin wiring + tasks) unit tests cannot reach, and where the `--all`
+    // and registry-merge regressions lived.
+    testImplementation(gradleTestKit())
 }
 
 application {
