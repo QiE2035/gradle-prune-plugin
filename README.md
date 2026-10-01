@@ -3,17 +3,17 @@
 中文说明见 [README-zh.md](README-zh.md)。
 
 A Gradle cache-cleaner with the same semantics as `pnpm store prune`:
-**every build registers the modules it actually resolved; `prune` keeps the
-union of all registered builds and deletes everything else** from the shared
-dependency cache.
+**every build registers the modules it actually resolved; `prune` keeps what
+the registered builds that still exist are using and deletes everything else**
+from the shared dependency cache.
 
 ```
-registered builds: 3
-  ~/work/android-app  (214 modules)
-  ~/work/desktop-app  (98 modules)
-  ~/tools/script      (37 modules)
+registered builds: 3 — 2 in use, 1 gone
+  ~/work/android-app  (214 modules)   in use
+  ~/work/desktop-app  (98 modules)    in use
+  ~/tools/script      (37 modules)    gone → entry dropped
 
-prune: 1342 cached module versions, union of 3 builds = 251 unique
+prune: 1342 cached module versions, in use = 251 unique
         → 1091 deletable, would free 1.9 GB
 ```
 
@@ -23,7 +23,7 @@ Unlike `~/.gradle` "nuke the caches" scripts, this never touches:
   (Gradle's bookkeeping; deleting them corrupts the cache),
 - the version-named state dirs under `caches/` (`9.7.1`, `8.5`, …) — those are
   only touched by the separate, opt-in `gradlePruneVersionCaches` step,
-- any module that at least one registered build still references.
+- any module that a registered build which still exists is using.
 
 ## How it works
 
@@ -40,19 +40,61 @@ Unlike `~/.gradle` "nuke the caches" scripts, this never touches:
    }
    ```
 
-   File name = first 12 hex chars of the SHA-1 of the absolute build root,
-   so a deleted project's file can be removed with the project
-   (`gradle-prune --forget <build-root>`). Writes are atomic (temp file +
-   rename) and merges are conservative (union of modules, max `lastSeen`),
-   in **both** registrars — the plugin and the init script. An existing entry
-   that cannot be parsed is never overwritten: its coordinates would be lost
-   silently, so it is reported instead.
+   File name = first 12 hex chars of the SHA-1 of the absolute build root, so a
+   deleted project's entry is found — and dropped — by itself (see
+   [Stale builds](#stale-builds)); `gradle-prune --forget <build-root>` is the
+   manual equivalent. Writes are atomic (temp file + rename) and merges are
+   conservative (union of modules, max `lastSeen`), in **both** registrars —
+   the plugin and the init script. An existing entry that cannot be parsed is
+   never overwritten: its coordinates would be lost silently, so it is
+   reported instead.
 
 2. **Prune.** The CLI (or `gradlePruneModules` task) scans
    `caches/modules-2/files-2.1/<group>/<name>/<version>/` and deletes every
-   version dir whose coordinate is **not** in the union. Deletion is
-   bottom-up (sha1 → version → name → group), removing directories that end
-   up empty. Only `files-2.1` is ever modified.
+   version dir whose coordinate is **not in use**, where
+
+   ```
+   in use = referenced by a registered build whose root still exists
+   ```
+
+   Deletion is bottom-up (sha1 → version → name → group), removing directories
+   that end up empty. Only `files-2.1` is ever modified.
+
+## Stale builds
+
+"The union of everything ever registered" would keep a deleted project's
+modules alive forever, so the keep-set is computed from **live** builds only.
+A registry entry is judged by one explicit question — *does the recorded build
+root still exist?* — with three possible answers, and **no timeout anywhere**:
+
+| Answer | When | Effect |
+|---|---|---|
+| **in use** | the directory exists, or the path is pinned | its modules are kept |
+| **gone** | the directory is verifiably absent | the entry is dropped and its modules become deletable |
+| **unverifiable** | the nearest existing ancestor is not readable (unmounted, hung, permission-denied) | kept — an infrastructure problem must never look like a deletion |
+
+Dropping a *gone* entry releases exactly the modules **no surviving build
+references**: the keep-set is the union over the entries that remain, so a
+module another project still uses can never be released by removing a dead
+one. The report says which roots are gone and how much that frees, and
+`--verbose` marks the deletions that only a gone build was holding.
+
+A build root can be legitimately absent for a while — an unmounted removable
+drive, an offline network share. Pin it and it counts as in use again:
+
+```bash
+gradle-prune --keep-root /mnt/usb/app            # CLI, repeatable
+gradle gradlePruneModules -Pprune.keepRoots=/mnt/usb/app;/mnt/nas/tool
+```
+
+or list the paths, one per line (`#` comments allowed), in
+`<registry>/keep-roots.txt` — which is the option that survives a "set and
+forget" install. A pin covers the path and everything below it, matched on a
+path boundary (`/a` does not pin `/ab`).
+
+Entries are dropped only when a run actually proceeds: a dry run reports what
+it would drop, and a run that refuses (see the safety model) changes nothing at
+all.
 
 ## Installation
 
@@ -205,12 +247,15 @@ gradle-prune --apply
 --apply          perform deletions (default is a dry-run preview)
 --all            ignore the registry entirely and delete the ENTIRE module
                  cache (the only way to wipe it; also the only way to prune
-                 when nothing is registered)
+                 when nothing is in use)
 --force          proceed despite a recently-touched build lock (lock < 30 s
                  old) or unreadable registry files
--v, --verbose    full module list + per-dir sizes
---forget ROOT    remove ROOT's registry entry and exit (repeatable); the
-                 "I deleted that project" case
+-v, --verbose    full module list; marks deletions only a gone build used
+--forget ROOT    remove ROOT's registry entry and exit (repeatable); no longer
+                 needed when the project is really gone — see "Stale builds"
+--keep-root DIR  treat DIR (and everything below it) as still in use even when
+                 it is absent — an unmounted drive or offline share; also read
+                 from <registry>/keep-roots.txt (repeatable)
 --registry DIR   alternate registry dir (default <GRADLE_USER_HOME>/prune/registry)
 --modules-dir DIR
                  alternate files-2.1 dir (default <GRADLE_USER_HOME>/caches/modules-2/files-2.1)
@@ -249,6 +294,7 @@ Version dirs are matched conservatively by the regex
 | | `-Pprune.modules.verbose` | `false` |
 | | `-Pprune.modules.modulesDir` | `<GUH>/caches/modules-2/files-2.1` |
 | | `-Pprune.modules.registryDir` | `<GUH>/prune/registry` |
+| | `-Pprune.keepRoots` | *(none)* — see [Stale builds](#stale-builds) |
 | `gradlePruneVersionCaches` | `-Pprune.versions.dryRun` | `true` |
 | | `-Pprune.versions.cachesDir` | `<GUH>/caches` |
 | registration (plugin) | `-Pprune.captureDownloads` | `false` |
@@ -270,7 +316,10 @@ gradle gradlePruneModules -Pprune.modules.dryRun=false -Pprune.modules.verbose=t
 
 ## Forgetting a build
 
-Delete the project? Remove its registry entry:
+A project that is **gone** is dropped automatically: the next prune sees that
+its build root no longer exists and removes the entry (see
+[Stale builds](#stale-builds)). `--forget` is for the case where you want an
+entry gone *now*, without running a prune:
 
 ```bash
 gradle-prune --forget /abs/build/root      # repeatable
@@ -280,19 +329,25 @@ The argument is matched against the stored build root (so a relative path or a
 trailing slash is fine), and the file that entry was read from is the one
 removed. The older `rm ~/.gradle/prune/registry/$(printf %s … | sha1sum | cut -c1-12).json`
 recipe still works, and deleting the whole `prune/registry` dir starts fresh —
-the next build re-registers itself; an empty union refuses to prune unless
-`--all`).
+the next build re-registers itself; an empty keep-set refuses to prune unless
+`--all`.
 
 ## Safety model
 
 - **Dry-run by default** for both the CLI and the tasks.
-- **Empty union refuses** to delete anything unless `--all` (guards against
-  a wiped/lost registry).
+- **An empty keep-set refuses** to delete anything unless `--all` (guards
+  against a wiped/lost registry, and against every build happening to be
+  gone at once).
+- **A build root that cannot be inspected is kept**, never dropped: only a
+  *verifiably* absent directory is "gone" (see
+  [Stale builds](#stale-builds)). Pins cover roots that are absent on purpose.
 - **Unreadable registry files** are reported, and block a real deletion
   (`--apply` / `-Pprune.modules.dryRun=false`) unless `--force` /
   `-Pprune.modules.force=true` is passed. A file that cannot be parsed shrinks
   the keep-set, which is the one failure this tool cannot undo; an existing
   entry is also never overwritten while it is unparseable.
+- **A refusal changes nothing at all** — no cache content and no registry
+  entry.
 - **Recent build lock** (`modules-2.lock` touched < 30 s ago) → non-blocking
   warning, silenced by `--force`.
 - **Cache-only deletions**: only `files-2.1/<g>/<n>/<v>` trees, bottom-up,
@@ -307,12 +362,14 @@ the next build re-registers itself; an empty union refuses to prune unless
 gradle build
 ```
 
-60 tests: 55 unit tests cover the registry store, scanner/planner/executor,
-lock guard, version-cache pruner, mtime-delta capture, coordinate parsing and
-the resolution-graph walker (against faked Gradle API types), and 5 TestKit
-tests drive the real plugin through a real Gradle build —
-`PruneTasksIntegrationTest` covers registration from a resolved configuration,
-`--all`, the default dry-run and the unreadable-registry refusal, all offline.
+79 tests: 72 unit tests cover the registry store, the build-root probe and the
+usage/keep-set computation, the scanner/planner/executor/runner, lock guard,
+version-cache pruner, mtime-delta capture, coordinate parsing and the
+resolution-graph walker (against faked Gradle API types); 7 TestKit tests drive
+the real plugin through real Gradle builds — registration from a resolved
+configuration, `--all`, the default dry-run, the unreadable-registry refusal
+and the stale-build cleanup (only the gone build's exclusive module freed,
+shared modules kept) — all offline, with no network and no `~/.gradle`.
 
 The suite is driven by the **system `gradle`** command — run `gradle build`
 (the template's `gradlew` wrapper, if present, is not used). The init script is
@@ -333,10 +390,22 @@ still verified by hand against a real build.
   its already-resolved modules, which is precisely when the registry must stay
   conservative. Registration depends on that one hook; `PruneTasksIntegrationTest`
   would catch it breaking, so the migration can be done safely as a follow-up.
-- **The registry union only grows.** A build that stops using a module keeps
-  its coordinate until its registry entry is removed (`--forget`, or deleting
-  the file after removing the project). That is the conservative direction:
-  it can under-prune, never over-prune.
+- **Within a live build, the entry is still a monotonic union.** Dropping a
+  whole build is handled (the root is gone; see
+  [Stale builds](#stale-builds)), but a project that still exists and merely
+  *changed* its dependencies keeps the old coordinates: upgrading
+  `gson:2.10` → `2.11` leaves both pinned until the entry is forgotten, so
+  old versions accumulate and prune under-delivers. Fixing that needs
+  per-configuration snapshots — replacing what `runtimeClasspath` resolved the
+  last time *it* resolved, rather than unioning into one set — because a
+  single "the whole build is complete" signal cannot be trusted: a partial
+  build (`help`, an early failure, one configuration) must never shrink the
+  keep-set when a full one recorded more. Precision here is deliberately
+  traded for the guarantee that this tool over-deletes nothing.
+- **A build root is identified by its path.** Moving or renaming a project
+  registers a second entry under the new path; the old one is dropped on the
+  next prune because its path is gone, and the project re-registers itself, so
+  the practical effect is a one-time re-download at worst.
 
 ## Project layout
 
@@ -345,7 +414,7 @@ src/main/kotlin/io/github/qie2035/gradleprune/
   core/
     ModuleCoordinate.kt      g:n:v value object + parser
     CachePaths.kt            GRADLE_USER_HOME / files-2.1 / registry paths
-    Bytes.kt                 shared human-readable byte formatting
+    Format.kt                shared byte/timestamp formatting
     Cli.kt                   Clikt command (gradle-prune)
     capture/
       GraphWalker.kt         ResolutionResult → module coordinates
@@ -355,9 +424,13 @@ src/main/kotlin/io/github/qie2035/gradleprune/
     registry/
       ModuleRegistry.kt      per-build JSON record (kotlinx-serialization)
       RegistryStore.kt       read/merge/atomic-write of registry files
+      BuildRootProbe.kt      does the build root still exist? (LIVE/STALE/
+                             UNKNOWN + keep-roots pins; never time-based)
+      RegistryUsage.kt       keep-set = coordinates a live entry references
     prune/
+      PruneRunner.kt         the whole decision, shared by CLI + task
       CacheScanner.kt        enumerate files-2.1/<g>/<n>/<v> + sizes
-      PrunePlanner.kt        cache ∖ union → deletion plan
+      PrunePlanner.kt        cache ∖ in-use → deletion plan
       PruneExecutor.kt       bottom-up deletion + empty-parent cleanup
       VersionCachePruner.kt  stale per-version state dirs (opt-in)
       LockGuard.kt           recent-build detection
