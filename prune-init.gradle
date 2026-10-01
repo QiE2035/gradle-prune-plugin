@@ -51,7 +51,10 @@ def recordResult = { result, logger ->
                 def id = dep.selected.id
                 if (id instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier) {
                     // ModuleComponentIdentifier exposes getGroup()/getModule()/getVersion().
-                    resolvedModules.add("${id.group}:${id.module}:${id.version}")
+                    // NOTE: plain String concatenation on purpose — a Groovy GString
+                    // ("${a}:${b}:${c}") does not equal a plain String read back from
+                    // JSON, which would defeat the set's deduplication.
+                    resolvedModules.add(id.group + ':' + id.module + ':' + id.version)
                 }
             }
         }
