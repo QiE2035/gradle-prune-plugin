@@ -32,6 +32,17 @@
 //
 // Prefer prune-init.gradle unless the surrounding ecosystem is Kotlin-only.
 //
+import org.gradle.api.Action
+import org.gradle.api.artifacts.ResolvableDependencies
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.DependencyResult
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import org.gradle.api.artifacts.result.ResolutionResult
+import java.security.MessageDigest
+import kotlin.io.path.createDirectories
+import kotlin.io.path.moveTo
+import kotlin.io.path.writeText
+
 val resolvedModules = linkedSetOf<String>()
 val g = gradle // capture: `gradle` is nullable inside buildFinished closures
 
