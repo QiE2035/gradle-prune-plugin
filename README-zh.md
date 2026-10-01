@@ -59,10 +59,11 @@ gradle installDist    # → build/install/gradle-prune-plugin/bin/gradle-prune-p
   `mavenLocal()` 后用 `pluginManagement` 引入）；
 - **CLI**：`installDist` 产出的 `gradle-prune-plugin` 可执行文件执行真正的
   清理，不经过 Gradle 守护进程；
-- **init script**：`prune-init.gradle` 提供第三种、完全不用插件的登记方式
-  （见下文）。
+- **init script**：`prune-init.gradle` 提供一种完全不用插件的登记方式
+  （见下文；它同样支持全局安装，还有把插件本身全局加载的
+  `prune-global-init.gradle` 变体）。
 
-### 三种登记方式
+### 登记方式
 
 **A. 插件（应用构建推荐）。** 把插件加进 classpath 并 apply：
 
@@ -98,12 +99,56 @@ SAM 类型和若干 receiver/属性技巧才能通过编译——完整列表见
 `prune-init.gradle.kts` 的文件头注释。只有当你的生态是纯 Kotlin 时才建议
 用 `.kts` 版。
 
-**C. mtime 兜底采集**（代码内已备好，默认关闭，尚未接到任务上）：
+**全局安装（每次构建自动登记）**。init script 同时也是"一劳永逸"模式：
+把它复制到 Gradle 用户主目录的 `init.d/` 目录，**本机所有 Gradle 构建**
+都会自动登记自己——不需要任何 per-project 配置，union 自然长成"这台机器
+实际跑过的构建"，这正是最接近 `pnpm store prune` 语义的用法：
+
+```bash
+mkdir -p ~/.gradle/init.d
+cp /path/to/prune-init.gradle ~/.gradle/init.d/gradle-prune-init.gradle
+```
+
+注意：
+
+- `init.d/` 是一个**目录**，Gradle 会自动扫描其中所有脚本；直接放在
+  `~/.gradle/` 根下的单个 `init.gradle` / `init.gradle.kts` **同样会被
+  自动加载**（两种位置、两种形式都生效，已在 Gradle 9.7.1 上实测验证）。
+- 卸载 = 删掉该文件，然后 `gradle --stop`。
+- **关闭开关**（全局安装后建议保留这个能力）：设环境变量
+  `GRADLE_PRUNE_DISABLE=1`，或命令行加 `-Dgradle.prune.skip=true`，
+  即可不删文件地让脚本完全空转（例如迁移 Gradle 用户主目录期间）。
+
+**C. 插件全局安装（登记 + 清理任务，整机生效）**。插件本身也可以用
+同样的方式全局安装——最接近 `pnpm` 全局行为的用法：**本机所有构建**
+自动登记，且 `gradlePruneModules` / `gradlePruneVersionCaches` 任务在
+**每个项目**里都可用，无需任何 per-project 的 `plugins {}` 配置，也无需
+重复实现一遍捕获逻辑：
+
+```bash
+# 一次性，在本仓库内：
+gradle publishToMavenLocal
+# 然后安装全局 init 脚本（两个变体任选）：
+mkdir -p ~/.gradle/init.d
+cp /path/to/prune-global-init.gradle ~/.gradle/init.d/
+# （Kotlin 变体：prune-global-init.gradle.kts）
+gradle --stop
+```
+
+原理：脚本顶层的 `initscript {}` 块把插件 jar（来自 `mavenLocal()`，
+传递依赖来自 `mavenCentral()`）放进 init 脚本自己的 classpath，再从中
+加载插件类并 apply 到每个 project。插件必须**按类** apply（按 id 解析
+不看 init script 的 classpath），且 `initscript {}` 块必须留在脚本**顶部**
+——KTS 变体的文件头注释详细列出了这两条及类型系统上的绕过。插件解析失败
+时脚本只打一条警告、构建照常进行；关闭开关与上面完全相同。卸载 = 删掉
+文件 + `gradle --stop`（`~/.m2` 里的发布产物可另行删除）。
+
+**D. mtime 兜底采集**（代码内已备好，默认关闭，尚未接到任务上）：
 `MtimeDeltaCapture` 按构建期间 `files-2.1` 下新增/变动的目录反推模块坐标，
 可覆盖"下载了但不出现在 `ResolutionResult` 里"的文件（例如某些
 buildscript 工件）。
 
-三种方式可叠加使用（注册表 upsert 是保守并集合并），init script 也不会
+上述方式可叠加使用（注册表 upsert 是保守并集合并），init script 也不会
 弄坏构建：所有钩子都包在 try/catch 里，失败只打日志。
 
 ## CLI 使用

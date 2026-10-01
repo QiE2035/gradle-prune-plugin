@@ -71,7 +71,7 @@ The same distribution serves two roles:
 `prune-init.gradle` offers a third, plugin-free way to register a build
 (see below).
 
-### Two ways to register builds
+### Ways to register builds
 
 **A. Plugin (recommended for app builds).** Put the plugin on the
 classpath and apply it:
@@ -110,8 +110,65 @@ and a few receiver/property workarounds — see the header of
 `prune-init.gradle.kts` for the exact list. Pick the `.kts` one only if your
 ecosystem is Kotlin-only.
 
-Both mechanisms are safe to stack (the registry upsert is a conservative
-union merge), and an init script cannot break the build: every hook is
+**Global install (auto-registration for every build).** The init script is
+also the "set and forget" mode: place it where Gradle auto-loads init
+scripts and **every** Gradle build on this machine registers itself — no
+per-project configuration, and the union grows to exactly "the builds this
+machine actually runs", which is the closest analogue to `pnpm store prune`
+semantics. Both locations work (verified on Gradle 9.7.1):
+
+```bash
+# a) the init.d/ directory (recommended — coexists with other init files):
+mkdir -p ~/.gradle/init.d
+cp /path/to/prune-init.gradle ~/.gradle/init.d/gradle-prune-init.gradle
+# b) a single root file — BOTH ~/.gradle/init.gradle and
+#    ~/.gradle/init.gradle.kts are auto-loaded for every build:
+cp /path/to/prune-init.gradle ~/.gradle/init.gradle
+# then restart daemons: gradle --stop
+```
+
+Notes:
+
+- `init.d/` is a **directory** that Gradle scans automatically; a bare
+  `~/.gradle/init.gradle` / `init.gradle.kts` at the root of the Gradle user
+  home is **also** loaded automatically (both forms, both locations).
+- Uninstall by removing the file, then `gradle --stop`.
+- **Kill switch** (recommended while installed globally): set
+  `GRADLE_PRUNE_DISABLE=1` in the environment, or
+  `-Dgradle.prune.skip=true` on the command line, to turn the script into a
+  complete no-op without deleting it (e.g. temporarily while migrating the
+  Gradle user home).
+
+**C. Global plugin install (registration + prune tasks, whole machine).**
+The plugin itself can be installed globally the same way — the closest
+analogue to `pnpm`'s global behaviour: **every** build on the machine
+auto-registers, and the `gradlePruneModules` / `gradlePruneVersionCaches`
+tasks are available in **every** project, with no per-project `plugins {}`
+entry and no duplicated init-script capture code:
+
+```bash
+# one time, in this repo:
+gradle publishToMavenLocal
+# then install the global init script (either variant):
+mkdir -p ~/.gradle/init.d
+cp /path/to/prune-global-init.gradle ~/.gradle/init.d/
+# (Kotlin variant: prune-global-init.gradle.kts)
+gradle --stop
+```
+
+Mechanics: the script's top-level `initscript {}` block puts the plugin jar
+(from `mavenLocal()`, transitive dependencies from `mavenCentral()`) on the
+init script's own classpath; the script loads the plugin class from there
+and applies it to every project. The plugin must be applied **by class**
+(plugin-id resolution does not consult the init script classpath) and the
+`initscript {}` block must stay at the **top** of the script — the KTS
+variant's header lists both workarounds in detail. If the plugin cannot be
+resolved the script logs one warning and the build continues unaffected;
+the kill switch works exactly as above. Uninstall: remove the file +
+`gradle --stop` (the `~/.m2` publication can be deleted separately).
+
+Both global mechanisms are safe to stack (the registry upsert is a
+conservative union merge), and neither can break the build: every hook is
 wrapped in try/catch and only logs.
 
 ## Using the CLI
