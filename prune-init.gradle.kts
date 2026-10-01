@@ -1,5 +1,6 @@
-// prune-init.gradle.kts — Kotlin-DSL variant of the init-script registration
-// for gradle-prune. Same semantics as prune-init.gradle (the Groovy original):
+// prune-init.gradle.kts — init-script registration for gradle-prune.
+//
+// Semantics (identical to what the plugin's CaptureRegistrar does):
 //
 //   - hooks incoming.afterResolve on every resolvable configuration of every
 //     project plus each project's buildscript configurations (plugin deps);
@@ -9,17 +10,32 @@
 //     atomic temp-file + rename;
 //   - never breaks the build: every hook is try/catch-ed, failures only log.
 //
-// Usage (identical to the Groovy variant):
+// Usage:
 //   gradle -I /path/to/prune-init.gradle.kts build
 //        [-Dgradle.prune.registry.dir=/custom/registry/dir]
 //
-// Why the Groovy version is still the recommended default: this Kotlin variant
-// only compiles because Gradle's callback APIs are Groovy-Closure-first, so
-// several traps had to be worked around (verified against Gradle 9.7.1):
+// Global install (auto-registration for every build): the same file can be
+// placed anywhere Gradle auto-loads init scripts from — no per-project
+// configuration needed. Both locations work (verified on Gradle 9.7.1):
+//   a) the init.d/ directory (recommended — coexists with other files):
+//      mkdir -p ~/.gradle/init.d
+//      cp /path/to/prune-init.gradle.kts ~/.gradle/init.d/gradle-prune-init.gradle.kts
+//   b) a single root file — a bare ~/.gradle/init.gradle.kts at the root of
+//      the Gradle user home is auto-loaded for every build as well
+//      (use it only if you have no other root init file):
+//      cp /path/to/prune-init.gradle.kts ~/.gradle/init.gradle.kts
+//   Uninstall by removing the file, then `gradle --stop`.
+//
+// Kill switch: set GRADLE_PRUNE_DISABLE (1/true/yes/on) as an environment
+// variable, or -Dgradle.prune.skip=true, to turn this script into a
+// complete no-op — useful while it lives in init.d/.
+//
+// Why this file needs explicit Action SAM types and workarounds: Gradle's
+// callback APIs are Groovy-Closure-first, so plain Kotlin lambdas resolve
+// to the Closure overloads and fail to compile (verified against 9.7.1):
 //
 //   - afterResolve(Action) / allDependencies(Action) need EXPLICIT Action SAM
-//     types (Action<ResolvableDependencies>, Action<DependencyResult>) — the
-//     plain lambda form resolves to the Closure overload and fails to compile;
+//     types (Action<ResolvableDependencies>, Action<DependencyResult>);
 //   - Configuration.isCanBeResolved() must be called by its getter name —
 //     the Kotlin property `canBeResolved` is not generated;
 //   - the `gradle` object is `Gradle?` inside top-level and buildFinished
@@ -29,8 +45,6 @@
 //     is not an error, it still works;
 //   - kotlin.io.path.* imports are required for Path.writeText/moveTo/
 //     createDirectories (File extensions have different receiver rules here).
-//
-// Prefer prune-init.gradle unless the surrounding ecosystem is Kotlin-only.
 //
 import org.gradle.api.Action
 import org.gradle.api.artifacts.ResolvableDependencies
@@ -43,28 +57,45 @@ import kotlin.io.path.createDirectories
 import kotlin.io.path.moveTo
 import kotlin.io.path.writeText
 
+// Shared state: coordinates seen so far in this build (script-scoped).
 val resolvedModules = linkedSetOf<String>()
 val g = gradle // capture: `gradle` is nullable inside buildFinished closures
 
+// Kill switch: env GRADLE_PRUNE_DISABLE (1/true/yes/on) or
+// -Dgradle.prune.skip=true turns this script into a complete no-op.
+val pruneEnabled = !(
+    System.getenv("GRADLE_PRUNE_DISABLE")?.lowercase() in listOf("1", "true", "yes", "on") ||
+        System.getProperty("gradle.prune.skip")?.lowercase() in listOf("true", "1")
+)
+
 val capture = Action<ResolvableDependencies> {
+    if (!pruneEnabled) return@Action
     try {
         resolutionResult.allDependencies(Action<DependencyResult> {
             if (this is ResolvedDependencyResult) {
                 val id = this.selected.id
-                if (id is ModuleComponentIdentifier) resolvedModules.add("${id.group}:${id.module}:${id.version}")
+                // Kotlin template strings produce plain java.lang.String, so
+                // the set's dedup works across builds (a Groovy GString does
+                // NOT equal a String read back from the registry JSON).
+                if (id is ModuleComponentIdentifier) {
+                    resolvedModules.add("${id.group}:${id.module}:${id.version}")
+                }
             }
         })
     } catch (t: Throwable) { /* never break the build */ }
 }
 
-allprojects {
-    configurations.configureEach { if (isCanBeResolved) incoming.afterResolve(capture) }
-    buildscript.configurations.configureEach { if (isCanBeResolved) incoming.afterResolve(capture) }
+if (pruneEnabled) {
+    allprojects {
+        configurations.configureEach { if (isCanBeResolved) incoming.afterResolve(capture) }
+        buildscript.configurations.configureEach { if (isCanBeResolved) incoming.afterResolve(capture) }
+    }
 }
 
 fun sha1Hex(s: String): String = MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
 g.buildFinished(Action {
+    if (!pruneEnabled) return@Action
     try {
         if (resolvedModules.isEmpty()) return@Action
         val buildRoot = rootProject.projectDir.absolutePath

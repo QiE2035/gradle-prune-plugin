@@ -1,6 +1,5 @@
 /*
- * prune-global-init.gradle.kts — global plugin install for gradle-prune
- * (Kotlin-DSL variant of prune-global-init.gradle; identical behaviour).
+ * prune-global-init.gradle.kts — global plugin install for gradle-prune.
  *
  * Makes the io.github.qie2035.gradle-prune PLUGIN itself load globally:
  * every build on this machine automatically
