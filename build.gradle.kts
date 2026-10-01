@@ -21,7 +21,17 @@ dependencies {
 }
 
 application {
+    // Name the launcher `gradle-prune`, not the default `<project.name>`
+    // (`gradle-prune-plugin`) — the READMEs and the Clikt command name both
+    // say `gradle-prune`.
+    applicationName = "gradle-prune"
     mainClass = "io.github.qie2035.gradleprune.core.CliKt"
+
+    // Java 24+ prints "A restricted method in java.lang.System has been called"
+    // on every run because Mordant's JNA terminal backend loads a native
+    // library. Opting in silences it (and keeps working when it becomes an
+    // error in a future release).
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
 gradlePlugin {
@@ -39,5 +49,6 @@ tasks.test {
     useJUnitPlatform()
 }
 
-// maven-publish + java (via java-gradle-plugin) auto-creates a `mavenJava`
-// publication; consumed by prune-global.init.gradle.kts via mavenLocal().
+// maven-publish (via java-gradle-plugin) publishes the `pluginMaven` artifact
+// plus the `io.github.qie2035.gradle-prune.gradle.plugin` marker, which is what
+// prune-global.init.gradle.kts consumes through mavenLocal().
