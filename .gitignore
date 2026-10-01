@@ -43,6 +43,8 @@ bin/
 
 ### Local / environment ###
 local.properties
+# Local tooling scratch (empty scaffolding left behind by ad-hoc probes).
+.probe/
 
 ### JVM crash dumps ###
 hs_err_pid*.log

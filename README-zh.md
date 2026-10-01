@@ -16,8 +16,8 @@ prune: 缓存中 1342 个模块版本, 3 个构建的并集 = 251 个唯一模�
 
 - `metadata-*` / `resources-*` / `descriptor*` / `gc.properties` / 锁文件
   （Gradle 的记账数据，删了会损坏缓存）；
-- 当前正在使用的 Gradle 版本的状态目录（只有可选的 `--all` 版本缓存步骤
-  才可能涉及其它版本）；
+- `caches/` 下按版本命名的状态目录（`9.7.1`、`8.5`…）——只有另外那个
+  可选步骤 `gradlePruneVersionCaches` 才会涉及；
 - 任何仍被至少一个已登记构建引用的模块。
 
 ## 工作原理
@@ -36,8 +36,10 @@ prune: 缓存中 1342 个模块版本, 3 个构建的并集 = 251 个唯一模�
    ```
 
    文件名 = 构建根目录绝对路径 SHA-1 的前 12 位十六进制，因此删掉项目后
-   可以直接删掉对应文件（见下文"注销一个构建"）。写入是原子的
-   （临时文件 + rename），合并是保守的（模块取并集、`lastSeen` 取最大值）。
+   可以直接删掉对应文件（`gradle-prune --forget <构建根目录>`）。写入是原子的
+   （临时文件 + rename），合并是保守的（模块取并集、`lastSeen` 取最大值）——
+   **插件和 init script 两条路径都是如此**。已存在但解析失败的文件绝不会被
+   覆盖：那会静默丢掉它记录的所有坐标，因此工具会把它报出来。
 
 2. **清理（prune）**。CLI（或 `gradlePruneModules` 任务）扫描
    `caches/modules-2/files-2.1/<group>/<name>/<version>/`，删除所有坐标
@@ -51,13 +53,13 @@ prune: 缓存中 1342 个模块版本, 3 个构建的并集 = 251 个唯一模�
 
 ```bash
 gradle build          # 编译 + 单元测试
-gradle installDist    # → build/install/gradle-prune-plugin/bin/gradle-prune-plugin
+gradle installDist    # → build/install/gradle-prune/bin/gradle-prune
 ```
 
 - **插件**：把 `io.github.qie2035.gradle-prune` 加到 classpath 并 apply，
   即可登记构建的模块（可用 `includeBuild` 指向本仓库，或发布到
   `mavenLocal()` 后用 `pluginManagement` 引入）；
-- **CLI**：`installDist` 产出的 `gradle-prune-plugin` 可执行文件执行真正的
+- **CLI**：`installDist` 产出的 `gradle-prune` 可执行文件执行真正的
   清理，不经过 Gradle 守护进程；
 - **init script**：`prune.init.gradle.kts` 提供一种完全不用插件的登记方式
   （见下文；它同样支持全局安装，还有把插件本身全局加载的
@@ -161,36 +163,42 @@ Class 实参）。`initscript {}` 块必须留在脚本**顶部**——只有那
 失败——有意的硬依赖，删掉该文件即可退出。关闭开关与上面完全相同。
 卸载 = 删掉文件 + `gradle --stop`（`~/.m2` 里的发布产物可另行删除）。
 
-**D. mtime 兜底采集**（代码内已备好，默认关闭，尚未接到任务上）：
-`MtimeDeltaCapture` 按构建期间 `files-2.1` 下新增/变动的目录反推模块坐标，
-可覆盖"下载了但不出现在 `ResolutionResult` 里"的文件（例如某些
-buildscript 工件）。
+**D. mtime 兜底采集**（可选，默认关闭，已接入登记流程）：
+打开 `-Pprune.captureDownloads=true`（或 `-Dgradle.prune.captureDownloads=true`）
+后，`MtimeDeltaCapture` 按构建期间 `files-2.1` 下被写过的目录反推模块坐标，
+覆盖"下载了但不出现在 `ResolutionResult` 里"的文件（例如只取 metadata 的
+抓取、settings / `pluginManagement` 解析）。
 
-上述方式可叠加使用（注册表 upsert 是保守并集合并），init script 也不会
-弄坏构建：所有钩子都包在 try/catch 里，失败只打日志。
+上述方式可叠加使用（插件和 init script 的注册表写入都是保守并集合并），
+两条路径也都不会弄坏构建：所有钩子都包在 try/catch 里，失败只打日志。
 
 ## CLI 使用
 
 ```bash
 # 干跑（默认）—— 只预览将释放多少，不删任何东西
-gradle-prune-plugin
+gradle-prune
 
 # 实际删除
-gradle-prune-plugin --apply
+gradle-prune --apply
 ```
 
 ```
 --apply          执行删除（默认是干跑预览）
---all            无视注册表、删除整个模块缓存
+--all            完全无视注册表，删除整个模块缓存
                  （也是空注册表时唯一允许 prune 的方式）
---force          忽略"构建锁刚被写过"的警告（锁 < 30 秒新）
+--force          忽略"构建锁刚被写过"的警告（锁 < 30 秒新），
+                 或忽略无法解析的注册表文件
 -v, --verbose    完整模块列表 + 每个目录的大小
+--forget ROOT    删除 ROOT 对应的注册表条目后退出（可重复）；
+                 "我把那个项目删了"的场景
 --registry DIR   自定义注册表目录（默认 <GRADLE_USER_HOME>/prune/registry）
 --modules-dir DIR
                  自定义 files-2.1 目录（默认 <GRADLE_USER_HOME>/caches/modules-2/files-2.1）
 ```
 
-`$GRADLE_USER_HOME` 默认为 `~/.gradle`，CLI 用它定位注册表和缓存。
+`GRADLE_USER_HOME` 默认是 `~/.gradle`，用于定位注册表和缓存。在 Gradle
+构建内部，插件和两个任务改用 `Gradle.getGradleUserHomeDir()`，因此
+`-g` / `--gradle-user-home` 同样生效。
 
 > 说明：本工具默认**干跑**，用 `--apply` 才真正删除（与 `pnpm store prune`
 > 的 `--dry-run` 开关方向相反，但安全性等价：不显式确认就不会删）。
@@ -222,8 +230,15 @@ gradle gradlePruneVersionCaches -Pprune.versions.dryRun=false
 | | `-Pprune.modules.registryDir` | `<GUH>/prune/registry` |
 | `gradlePruneVersionCaches` | `-Pprune.versions.dryRun` | `true` |
 | | `-Pprune.versions.cachesDir` | `<GUH>/caches` |
+| 登记（插件） | `-Pprune.captureDownloads` | `false` |
 
 布尔属性接受 `true/false`、`1/0`、`yes/no`、`on/off`（单词不区分大小写）。
+
+`-Pprune.captureDownloads=true` 会额外登记构建期间在 `files-2.1` 下被写过的
+目录（即 `MtimeDeltaCapture` 兜底采集）。它覆盖 Gradle 下载了但从未作为
+"已解析依赖"上报的模块（只取 metadata 的抓取、settings /
+`pluginManagement` 解析等），代价是构建结束时多扫一遍缓存。默认关闭；
+`-Dgradle.prune.captureDownloads=true` 同样可用。
 
 示例：
 
@@ -236,22 +251,30 @@ gradle gradlePruneModules -Pprune.modules.dryRun=false -Pprune.modules.verbose=t
 删掉某个项目后，删掉它的注册表条目即可：
 
 ```bash
-rm ~/.gradle/prune/registry/$(printf %s /abs/build/root | sha1sum | cut -c1-12).json
+gradle-prune --forget /abs/build/root      # 可重复
 ```
 
-也可以直接删掉整个 `prune/registry` 目录重新开始（下次构建会重新登记；
-空并集会拒绝删除，除非 `--all`）。
+参数与注册表里存的构建根目录匹配（相对路径、结尾多一个 `/` 都能对上），
+删除的是真正读到的那个文件。原来的
+`rm ~/.gradle/prune/registry/$(printf %s … | sha1sum | cut -c1-12).json`
+配方依然有效；也可以直接删掉整个 `prune/registry` 目录重新开始（下次构建会
+重新登记；空并集会拒绝删除，除非 `--all`）。
 
 ## 安全模型
 
 - **默认干跑**：CLI 和任务都是先预览。
 - **空并集拒绝删除**：没有任何已登记构建时，除非 `--all` 否则什么都不删
   （防止注册表丢失/清空后误删）。
-- **构建锁新鲜度**：`modules-2` 锁文件在 30 秒内被写过 → 发出非阻塞警告
+- **无法解析的注册表文件会被报出来**，并且在真正删除时
+  （`--apply` / `-Pprune.modules.dryRun=false`）直接拒绝，除非显式
+  `--force` / `-Pprune.modules.force=true`。解析失败会缩小保留集，这是本
+  工具唯一无法挽回的失败模式；已存在但解析失败的条目也绝不会被覆盖。
+- **构建锁新鲜度**：`modules-2.lock` 在 30 秒内被写过 → 发出非阻塞警告
   （可能有构建在跑），`--force` 可静默；删除只动缓存文件，最多触发
   重新下载，不会弄坏构建。
 - **只删缓存内容**：只删 `files-2.1/<g>/<n>/<v>` 目录树，自底向上、顺手
   清理空父目录；metadata、resources、锁、GC 状态、版本状态目录一律不碰。
+  符号链接只解除链接本身，绝不跟进。
 - **删除有对账**：报告的释放字节数 = 实际删除内容的总大小。
 
 ## 实测效果（本机验证数据）
@@ -268,9 +291,24 @@ rm ~/.gradle/prune/registry/$(printf %s /abs/build/root | sha1sum | cut -c1-12).
 gradle build
 ```
 
-42 个单元测试覆盖：注册表存储、扫描/计划/执行器、锁守卫、版本缓存清理器、
-坐标解析、resolution 图遍历（对 Gradle API 类型打桩）。测试套件用
-**系统 `gradle`** 驱动（模板自带的 `gradlew` wrapper 不使用）。
+55 个单元测试覆盖：注册表存储、扫描/计划/执行器、锁守卫、版本缓存清理器、
+mtime 差量采集、坐标解析、resolution 图遍历（对 Gradle API 类型打桩）。
+测试套件用**系统 `gradle`** 驱动（模板自带的 `gradlew` wrapper 不使用）。
+插件 / init script 这两半目前靠真实构建手工验证，还没有自动化集成测试。
+
+## 已知限制
+
+- **采集完整性**：resolution 图只能看到作为"已选依赖"出现的模块。只为取
+  metadata 而抓取、或经由 `settings` / `pluginManagement` 解析的模块会漏掉，
+  除非打开 `-Pprune.captureDownloads=true`。漏掉的代价是重新下载，绝不会
+  弄坏构建。
+- **`Gradle.buildFinished` 在 Gradle 9 已废弃**。它仍是唯一同时适用于普通
+  插件和 init script 的构建结束钩子，因此仍在使用（代码里显式抑制了该
+  弃用警告并注明原因）。迁移到 `BuildEventsListenerRegistry` / `FlowScope`
+  是已记录的后续工作；在那之前登记依赖这个钩子。
+- **注册表并集只增不减**：某个构建不再使用某模块后，它的坐标会一直保留，
+  直到手动移除该条目（`--forget`，或删掉项目后删文件）。这是保守方向：
+  可能少删，绝不会多删。
 
 ## 项目布局
 
@@ -279,11 +317,13 @@ src/main/kotlin/io/github/qie2035/gradleprune/
   core/
     ModuleCoordinate.kt      g:n:v 值对象 + 解析器
     CachePaths.kt            GRADLE_USER_HOME / files-2.1 / 注册表路径解析
+    Bytes.kt                 共享的字节数格式化
     Cli.kt                   Clikt 命令（CLI 入口）
     capture/
       GraphWalker.kt         ResolutionResult → 模块坐标
-      MtimeDeltaCapture.kt   兜底采集：构建期间 files-2.1 新增/变动的
-                             模块（mtime 差量）；默认关闭，尚未接到任务
+      MtimeDeltaCapture.kt   可选兜底采集：构建期间 files-2.1 被写过的
+                             模块（mtime 差量）；
+                             -Pprune.captureDownloads=true 开启
     registry/
       ModuleRegistry.kt      每构建一条 JSON 记录（kotlinx-serialization）
       RegistryStore.kt       注册表文件的读取/合并/原子写入

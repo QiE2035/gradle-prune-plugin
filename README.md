@@ -21,8 +21,8 @@ Unlike `~/.gradle` "nuke the caches" scripts, this never touches:
 
 - `metadata-*` / `resources-*` / `descriptor*` / `gc.properties` / lock files
   (Gradle's bookkeeping; deleting them corrupts the cache),
-- the version-named state dir of the Gradle release in use (only with the
-  separate `--all` version-cache step),
+- the version-named state dirs under `caches/` (`9.7.1`, `8.5`, …) — those are
+  only touched by the separate, opt-in `gradlePruneVersionCaches` step,
 - any module that at least one registered build still references.
 
 ## How it works
@@ -41,9 +41,12 @@ Unlike `~/.gradle` "nuke the caches" scripts, this never touches:
    ```
 
    File name = first 12 hex chars of the SHA-1 of the absolute build root,
-   so a deleted project's file can be removed with the project (see
-   `forget`). Writes are atomic (temp file + rename) and merges are
-   conservative (union of modules, max `lastSeen`).
+   so a deleted project's file can be removed with the project
+   (`gradle-prune --forget <build-root>`). Writes are atomic (temp file +
+   rename) and merges are conservative (union of modules, max `lastSeen`),
+   in **both** registrars — the plugin and the init script. An existing entry
+   that cannot be parsed is never overwritten: its coordinates would be lost
+   silently, so it is reported instead.
 
 2. **Prune.** The CLI (or `gradlePruneModules` task) scans
    `caches/modules-2/files-2.1/<group>/<name>/<version>/` and deletes every
@@ -58,7 +61,7 @@ Build it with your system Gradle (≥ 9; developed against 9.7.1):
 
 ```bash
 gradle build          # compile + unit tests
-gradle installDist    # → build/install/gradle-prune-plugin/bin/gradle-prune
+gradle installDist    # → build/install/gradle-prune/bin/gradle-prune
 ```
 
 The same distribution serves two roles:
@@ -104,8 +107,12 @@ gradle -I /path/to/prune.init.gradle.kts build
 The script needs explicit `Action` SAM types and a few receiver/property
 workarounds because Gradle's callback APIs are Groovy-Closure-first (plain
 Kotlin lambdas resolve to the Closure overloads) — the exact list is in
-the file header. It registers byte-for-byte the same coordinates the
-plugin does (verified: same 23-module set on a real build).
+the file header. It registers the same coordinates the plugin does
+(verified: same 23-module set on a real build) and merges them into the
+existing entry with the same union / max-`lastSeen` contract
+(`RegistryStore.upsert`), so a light build can never shrink a previous
+build's entry. Progress is logged at debug level, like the plugin — run
+`gradle -i` to see it.
 
 **Global install (auto-registration for every build).** The init script is
 also the "set and forget" mode: place it where Gradle auto-loads init
@@ -196,17 +203,23 @@ gradle-prune --apply
 
 # Flags
 --apply          perform deletions (default is a dry-run preview)
---all            delete the ENTIRE module cache regardless of the registry
-                 (also the only way to prune an empty registry)
---force          ignore a recent build lock warning (lock < 30 s old)
+--all            ignore the registry entirely and delete the ENTIRE module
+                 cache (the only way to wipe it; also the only way to prune
+                 when nothing is registered)
+--force          proceed despite a recently-touched build lock (lock < 30 s
+                 old) or unreadable registry files
 -v, --verbose    full module list + per-dir sizes
+--forget ROOT    remove ROOT's registry entry and exit (repeatable); the
+                 "I deleted that project" case
 --registry DIR   alternate registry dir (default <GRADLE_USER_HOME>/prune/registry)
 --modules-dir DIR
                  alternate files-2.1 dir (default <GRADLE_USER_HOME>/caches/modules-2/files-2.1)
 ```
 
 `$GRADLE_USER_HOME` defaults to `~/.gradle` and is used to locate both the
-registry and the cache.
+registry and the cache. Inside a Gradle build the plugin and its tasks use
+`Gradle.getGradleUserHomeDir()` instead, so `-g` / `--gradle-user-home` is
+honoured there too.
 
 ### Optional: version-cache cleanup
 
@@ -215,7 +228,7 @@ touched by the core prune. To also drop stale version dirs (kept: the
 version currently running):
 
 ```bash
-gradle-prune --all          # core prune over everything
+gradle-prune --all          # ignore the registry and wipe the module cache
 # plus the dedicated version-cache step (opt-in task when the plugin is
 # applied, or call the core directly):
 gradle gradlePruneVersionCaches            # dry-run
@@ -238,8 +251,16 @@ Version dirs are matched conservatively by the regex
 | | `-Pprune.modules.registryDir` | `<GUH>/prune/registry` |
 | `gradlePruneVersionCaches` | `-Pprune.versions.dryRun` | `true` |
 | | `-Pprune.versions.cachesDir` | `<GUH>/caches` |
+| registration (plugin) | `-Pprune.captureDownloads` | `false` |
 
 Boolean flags accept `true/false`, `1/0`, `yes/no`, `on/off` (case-insensitive).
+
+`-Pprune.captureDownloads=true` additionally records every `files-2.1`
+directory written during the build (the `MtimeDeltaCapture` safety net). It
+covers modules Gradle downloads but never reports as resolved — metadata-only
+fetches, settings/`pluginManagement` resolution — at the cost of one cache
+scan at build end. Off by default; `-Dgradle.prune.captureDownloads=true`
+works too.
 
 Example:
 
@@ -252,22 +273,31 @@ gradle gradlePruneModules -Pprune.modules.dryRun=false -Pprune.modules.verbose=t
 Delete the project? Remove its registry entry:
 
 ```bash
-rm ~/.gradle/prune/registry/$(printf %s /abs/build/root | sha1sum | cut -c1-12).json
+gradle-prune --forget /abs/build/root      # repeatable
 ```
 
-(or just delete the whole `prune/registry` dir to start fresh — the next
-build re-registers itself; an empty union refuses to prune unless `--all`).
+The argument is matched against the stored build root (so a relative path or a
+trailing slash is fine), and the file that entry was read from is the one
+removed. The older `rm ~/.gradle/prune/registry/$(printf %s … | sha1sum | cut -c1-12).json`
+recipe still works, and deleting the whole `prune/registry` dir starts fresh —
+the next build re-registers itself; an empty union refuses to prune unless
+`--all`).
 
 ## Safety model
 
 - **Dry-run by default** for both the CLI and the tasks.
 - **Empty union refuses** to delete anything unless `--all` (guards against
   a wiped/lost registry).
-- **Recent build lock** (`modules-2.metadata-*/**` or any `*.lock` touched
-  < 30 s ago) → non-blocking warning, skipped unless `--force`.
+- **Unreadable registry files** are reported, and block a real deletion
+  (`--apply` / `-Pprune.modules.dryRun=false`) unless `--force` /
+  `-Pprune.modules.force=true` is passed. A file that cannot be parsed shrinks
+  the keep-set, which is the one failure this tool cannot undo; an existing
+  entry is also never overwritten while it is unparseable.
+- **Recent build lock** (`modules-2.lock` touched < 30 s ago) → non-blocking
+  warning, silenced by `--force`.
 - **Cache-only deletions**: only `files-2.1/<g>/<n>/<v>` trees, bottom-up,
   with empty-parent cleanup. Metadata, resources, locks, GC state and
-  version state dirs are never touched.
+  version state dirs are never touched. Symlinks are unlinked, never followed.
 - Deletion is verified: the reported freed bytes equal the summed size of
   what was actually removed.
 
@@ -277,11 +307,30 @@ build re-registers itself; an empty union refuses to prune unless `--all`).
 gradle build
 ```
 
-42 unit tests cover the registry store, scanner/planner/executor, lock
-guard, version-cache pruner, coordinate parsing and the resolution-graph
-walker (against faked Gradle API types). The test suite is driven by the
-**system `gradle`** command — run `gradle build` (the template's `gradlew`
-wrapper, if present, is not used).
+55 unit tests cover the registry store, scanner/planner/executor, lock
+guard, version-cache pruner, mtime-delta capture, coordinate parsing and the
+resolution-graph walker (against faked Gradle API types). The test suite is
+driven by the **system `gradle`** command — run `gradle build` (the template's
+`gradlew` wrapper, if present, is not used). The plugin/init-script halves are
+exercised by hand against a real build; there is no automated integration test
+for them yet.
+
+## Known limitations
+
+- **Capture completeness.** The resolution graph only reports modules that
+  appear as a *selected dependency*. Modules fetched for metadata only, or
+  resolved through `settings` / `pluginManagement`, are missed unless
+  `-Pprune.captureDownloads=true` is on. A miss costs a re-download, never a
+  broken build.
+- **`Gradle.buildFinished` is deprecated** in Gradle 9. It is still the only
+  build-end hook that works from both a plain plugin and an init script, so it
+  is used deliberately (with the deprecation suppressed and documented in
+  `CaptureRegistrar`). Migration to `BuildEventsListenerRegistry` / `FlowScope`
+  is the tracked follow-up; until then, registration depends on that hook.
+- **The registry union only grows.** A build that stops using a module keeps
+  its coordinate until its registry entry is removed (`--forget`, or deleting
+  the file after removing the project). That is the conservative direction:
+  it can under-prune, never over-prune.
 
 ## Project layout
 
@@ -290,12 +339,13 @@ src/main/kotlin/io/github/qie2035/gradleprune/
   core/
     ModuleCoordinate.kt      g:n:v value object + parser
     CachePaths.kt            GRADLE_USER_HOME / files-2.1 / registry paths
+    Bytes.kt                 shared human-readable byte formatting
     Cli.kt                   Clikt command (gradle-prune)
     capture/
       GraphWalker.kt         ResolutionResult → module coordinates
-      MtimeDeltaCapture.kt   safety-net capture: modules whose files-2.1 dirs
-                             got written during a build (mtime delta);
-                             off by default, not yet wired into a task
+      MtimeDeltaCapture.kt   opt-in safety-net capture: modules whose
+                             files-2.1 dirs were written during a build
+                             (mtime delta); -Pprune.captureDownloads=true
     registry/
       ModuleRegistry.kt      per-build JSON record (kotlinx-serialization)
       RegistryStore.kt       read/merge/atomic-write of registry files
@@ -308,7 +358,7 @@ src/main/kotlin/io/github/qie2035/gradleprune/
     report/
       ReportRenderer.kt      Mordant-colored terminal report
   plugin/
-    GradlePrunePlugin.kt     applies registrar + registers tasks
+    GradlePrunePlugin.kt     one registrar per build + registers tasks
     CaptureRegistrar.kt      hooks buildFinished → registry upsert
     PruneGradleCacheTask.kt  gradlePruneModules
     PruneVersionCachesTask.kt gradlePruneVersionCaches
