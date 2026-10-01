@@ -20,12 +20,36 @@
  *   gradle -I /path/to/prune-init.gradle build \
  *        -Dgradle.prune.registry.dir=/custom/registry/dir
  *
+ * Global install (auto-registration for every build): the same file can be
+ * placed anywhere Gradle auto-loads init scripts from — no per-project
+ * configuration needed. Both locations work (verified on Gradle 9.7.1):
+ *   a) the init.d/ directory (recommended — coexists with other files):
+ *      mkdir -p ~/.gradle/init.d
+ *      cp /path/to/prune-init.gradle ~/.gradle/init.d/gradle-prune-init.gradle
+ *   b) a single root file — BOTH ~/.gradle/init.gradle and
+ *      ~/.gradle/init.gradle.kts are auto-loaded for every build.
+ *   Uninstall by removing the file, then `gradle --stop`.
+ *
+ * Kill switch: set GRADLE_PRUNE_DISABLE (1/true/yes/on) as an environment
+ * variable, or -Dgradle.prune.skip=true, to turn this script into a
+ * complete no-op — useful while it lives in init.d/.
+ *
  * A Kotlin-DSL variant with identical behaviour exists as prune-init.gradle.kts
  * (its header lists the compiler workarounds it needs — Gradle's callback APIs
  * are Groovy-Closure-first, so Kotlin must use explicit Action SAM types and a
  * few receiver/property tricks). Groovy stays the default because it needs no
  * such workarounds.
  */
+
+// Kill switch: env GRADLE_PRUNE_DISABLE (1/true/yes/on) or
+// -Dgradle.prune.skip=true turns this script into a complete no-op.
+def pruneEnabled = {
+    def env = System.getenv('GRADLE_PRUNE_DISABLE')
+    if (env != null && ['1', 'true', 'yes', 'on'].contains(env.toLowerCase())) {
+        return false
+    }
+    return !['true', '1'].contains(System.getProperty('gradle.prune.skip')?.toLowerCase())
+}
 
 // Shared state: coordinates seen so far in this build (script-scoped).
 def resolvedModules = new LinkedHashSet<String>()
@@ -64,6 +88,7 @@ def recordResult = { result, logger ->
 }
 
 allprojects { p ->
+    if (!pruneEnabled()) return
     // Buildscript classpath (plugin dependencies resolve here).
     p.buildscript.configurations.all { conf ->
         if (conf.canBeResolved) {
@@ -83,6 +108,7 @@ allprojects { p ->
 }
 
 gradle.buildFinished { result ->
+    if (!pruneEnabled()) return
     try {
         def modules = resolvedModules.toList()
         if (modules.isEmpty()) return
