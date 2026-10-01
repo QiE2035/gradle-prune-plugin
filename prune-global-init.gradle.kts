@@ -10,26 +10,21 @@
  *
  * How it works: the `initscript {}` block below declares the plugin jar
  * (from the local Maven repository, with its transitive dependencies
- * from mavenCentral) on the init script's own classpath; the script then
- * loads the plugin class from that classpath and applies it to every
- * project.
+ * from mavenCentral) on the init script's own classpath, so the plugin
+ * class is a normal compile-time reference in the script body; the script
+ * applies it to every project via `pluginManager.apply(Class)` — plugin-id
+ * resolution does not consult the init script classpath, and the KTS
+ * `apply(String)` extension would reject a Class argument anyway.
  *
- * KTS-specific workarounds (Gradle 9.7.1, verified):
- *   - the `initscript {}` block must stay at the TOP of the script —
- *     Gradle only wires the init classpath there, and Kotlin can only
- *     reach the initscript handler's members from a top-level block
- *     (a nested second block compiles against the wrong receiver);
- *   - the classpath is force-resolved inside that same block, because
- *     `initscript.configurations` is not reachable from the script body;
- *   - the plugin is applied by CLASS via `project.pluginManager.apply(Class)`
- *     — plugin-id resolution does not consult the init script classpath,
- *     and `PluginContainer.apply` is shadowed in Kotlin by the KTS
- *     `apply(String)` extension, which rejects Class arguments;
- *   - a global init script must never break a build, so per-project
- *     apply failures and load failures are caught and logged only.
+ * The `initscript {}` block must stay at the TOP of the script: Gradle
+ * only wires the init classpath there (a nested block does not make the
+ * declared classpath visible to the script). Verified on Gradle 9.7.1.
  *
  * Prerequisite (run once in the gradle-prune-plugin checkout):
  *   gradle publishToMavenLocal
+ * If the artifact is missing, every build on the machine fails at init
+ * with a dependency-resolution error — an intentional hard dependency;
+ * remove this file (see uninstall) to back out.
  *
  * Install (pick ONE — both locations are auto-loaded):
  *   a) init.d directory (recommended — coexists with other init files):
@@ -45,14 +40,12 @@
  * variable, or -Dgradle.prune.skip=true, to turn this script into a
  * complete no-op.
  *
- * If the plugin cannot be resolved (publishToMavenLocal not run yet, or a
- * transient problem) the script logs one warning and every build continues
- * unaffected — a global init script must never break builds.
+ * A global init script must never break a build over one project's apply
+ * failure, so the per-project apply is try/catch-ed (debug-logged only).
  */
 
-import org.gradle.api.Plugin
+import io.github.qie2035.gradleprune.plugin.GradlePrunePlugin
 
-// Top level on purpose — see the header above.
 initscript {
     repositories {
         // mavenLocal() first: the plugin itself lives there.
@@ -64,9 +57,6 @@ initscript {
     dependencies {
         classpath("io.github.qie2035:gradle-prune-plugin:1.0-SNAPSHOT")
     }
-    // Force resolution so the plugin class is visible to the init
-    // script's class loader in this build.
-    configurations["classpath"].files
 }
 
 // Kill switch: env GRADLE_PRUNE_DISABLE (1/true/yes/on) or
@@ -77,25 +67,12 @@ val pruneEnabled = !(
 )
 
 if (pruneEnabled) {
-    try {
-        // Explicit Class<Plugin<*>?> so the Java
-        // PluginManager.apply(Class<out Plugin<*>>) overload is selected.
-        val pluginClass: Class<Plugin<*>?> = initscript.classLoader.loadClass(
-            "io.github.qie2035.gradleprune.plugin.GradlePrunePlugin",
-        ) as Class<Plugin<*>?>
-        allprojects {
-            try {
-                // Project.pluginManager.apply(Class) — the Java method.
-                pluginManager.apply(pluginClass)
-            } catch (t: Throwable) {
-                // A global init script must never break one project's build.
-                logger.debug("gradle-prune: global apply skipped: ${t.message}")
-            }
+    allprojects {
+        try {
+            pluginManager.apply(GradlePrunePlugin::class.java)
+        } catch (t: Throwable) {
+            // A global init script must never break one project's build.
+            logger.debug("gradle-prune: global apply skipped: ${t.message}")
         }
-    } catch (t: Throwable) {
-        println(
-            "gradle-prune: global init disabled — could not load the plugin " +
-                "(run 'gradle publishToMavenLocal' in the plugin checkout): ${t.message}",
-        )
     }
 }
