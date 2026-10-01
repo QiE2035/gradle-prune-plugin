@@ -80,6 +80,7 @@ class GradlePrunePlugin : Plugin<Project> {
                 task.verbose = project.boolProp(PROP_MODULES_VERBOSE, false)
                 task.modulesDir = project.stringProp(PROP_MODULES_DIR)
                 task.registryDir = project.stringProp(PROP_REGISTRY_DIR)
+                task.keepRoots = project.stringProp(PROP_KEEP_ROOTS)
             }
         }
         if (root.tasks.findByName(VERSION_TASK_NAME) == null) {
@@ -104,6 +105,13 @@ class GradlePrunePlugin : Plugin<Project> {
         const val PROP_MODULES_VERBOSE = "prune.modules.verbose"
         const val PROP_MODULES_DIR = "prune.modules.modulesDir"
         const val PROP_REGISTRY_DIR = "prune.modules.registryDir"
+
+        /**
+         * `-Pprune.keepRoots=/a;/b`: build roots to treat as still in use even
+         * when the directory is absent (unmounted drive, offline share).
+         */
+        const val PROP_KEEP_ROOTS = "prune.keepRoots"
+
         const val PROP_VERSIONS_DRY_RUN = "prune.versions.dryRun"
         const val PROP_VERSIONS_CACHES_DIR = "prune.versions.cachesDir"
 
