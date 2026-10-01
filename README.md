@@ -68,8 +68,8 @@ The same distribution serves two roles:
 - **CLI** — the `gradle-prune` binary from `installDist` does the actual
   pruning, with no Gradle daemon involved.
 
-`prune-init.gradle` offers a third, plugin-free way to register a build
-(see below).
+`prune-init.gradle.kts` offers a third, plugin-free way to register a
+build (see below).
 
 ### Ways to register builds
 
@@ -89,26 +89,23 @@ Every build run of that project refreshes its registry entry. Apply it to
 every project whose dependencies you want counted in the union.
 
 **B. Init script (zero-build-file approach).** Apply
-[`prune-init.gradle`](prune-init.gradle) with `-I` — a self-contained
-Groovy mirror of the plugin's registrar: it hooks the same
-`afterResolve` callbacks (project + buildscript configurations) and writes
-the same registry file at `buildFinished`. No plugin classes are loaded,
-no build file changes needed, and it never forces resolution of a
+[`prune-init.gradle.kts`](prune-init.gradle.kts) with `-I` — a
+self-contained Kotlin-DSL mirror of the plugin's registrar: it hooks the
+same `afterResolve` callbacks (project + buildscript configurations) and
+writes the same registry file at `buildFinished`. No plugin classes are
+loaded, no build file changes needed, and it never forces resolution of a
 configuration the build didn't already resolve:
 
 ```bash
-gradle -I /path/to/prune-init.gradle build
+gradle -I /path/to/prune-init.gradle.kts build
 # optional: -Dgradle.prune.registry.dir=/some/dir overrides the registry location
 ```
 
-A functionally identical Kotlin-DSL variant ships as
-[`prune-init.gradle.kts`](prune-init.gradle.kts). Both are byte-for-byte
-equivalent in what they register (verified: same 23-module set on a real
-build); the Groovy file stays the default because Gradle's callback APIs are
-Groovy-Closure-first, so the Kotlin variant needs explicit `Action` SAM types
-and a few receiver/property workarounds — see the header of
-`prune-init.gradle.kts` for the exact list. Pick the `.kts` one only if your
-ecosystem is Kotlin-only.
+The script needs explicit `Action` SAM types and a few receiver/property
+workarounds because Gradle's callback APIs are Groovy-Closure-first (plain
+Kotlin lambdas resolve to the Closure overloads) — the exact list is in
+the file header. It registers byte-for-byte the same coordinates the
+plugin does (verified: same 23-module set on a real build).
 
 **Global install (auto-registration for every build).** The init script is
 also the "set and forget" mode: place it where Gradle auto-loads init
@@ -120,10 +117,11 @@ semantics. Both locations work (verified on Gradle 9.7.1):
 ```bash
 # a) the init.d/ directory (recommended — coexists with other init files):
 mkdir -p ~/.gradle/init.d
-cp /path/to/prune-init.gradle ~/.gradle/init.d/gradle-prune-init.gradle
-# b) a single root file — BOTH ~/.gradle/init.gradle and
-#    ~/.gradle/init.gradle.kts are auto-loaded for every build:
-cp /path/to/prune-init.gradle ~/.gradle/init.gradle
+cp /path/to/prune-init.gradle.kts ~/.gradle/init.d/gradle-prune-init.gradle.kts
+# b) a single root file — a bare ~/.gradle/init.gradle.kts at the root of
+#    the Gradle user home is also auto-loaded for every build (only if you
+#    have no other root init file, or it conflicts with one):
+cp /path/to/prune-init.gradle.kts ~/.gradle/init.gradle.kts
 # then restart daemons: gradle --stop
 ```
 
@@ -131,7 +129,7 @@ Notes:
 
 - `init.d/` is a **directory** that Gradle scans automatically; a bare
   `~/.gradle/init.gradle` / `init.gradle.kts` at the root of the Gradle user
-  home is **also** loaded automatically (both forms, both locations).
+  home is **also** loaded automatically.
 - Uninstall by removing the file, then `gradle --stop`.
 - **Kill switch** (recommended while installed globally): set
   `GRADLE_PRUNE_DISABLE=1` in the environment, or
@@ -149,10 +147,9 @@ entry and no duplicated init-script capture code:
 ```bash
 # one time, in this repo:
 gradle publishToMavenLocal
-# then install the global init script (either variant):
+# then install the global init script:
 mkdir -p ~/.gradle/init.d
-cp /path/to/prune-global-init.gradle ~/.gradle/init.d/
-# (Kotlin variant: prune-global-init.gradle.kts)
+cp /path/to/prune-global-init.gradle.kts ~/.gradle/init.d/
 gradle --stop
 ```
 
@@ -161,8 +158,8 @@ Mechanics: the script's top-level `initscript {}` block puts the plugin jar
 init script's own classpath; the script loads the plugin class from there
 and applies it to every project. The plugin must be applied **by class**
 (plugin-id resolution does not consult the init script classpath) and the
-`initscript {}` block must stay at the **top** of the script — the KTS
-variant's header lists both workarounds in detail. If the plugin cannot be
+`initscript {}` block must stay at the **top** of the script — the file
+header lists the exact workarounds in detail. If the plugin cannot be
 resolved the script logs one warning and the build continues unaffected;
 the kill switch works exactly as above. Uninstall: remove the file +
 `gradle --stop` (the `~/.m2` publication can be deleted separately).
@@ -298,8 +295,8 @@ src/main/kotlin/io/github/qie2035/gradleprune/
     CaptureRegistrar.kt      hooks buildFinished → registry upsert
     PruneGradleCacheTask.kt  gradlePruneModules
     PruneVersionCachesTask.kt gradlePruneVersionCaches
-prune-init.gradle            -I init-script registration, Groovy (default)
-prune-init.gradle.kts        -I init-script registration, Kotlin DSL
-                             (equivalent; see its header for workarounds)
+prune-init.gradle.kts        -I init-script registration (Kotlin DSL;
+                             see its header for compiler workarounds)
+prune-global-init.gradle.kts global plugin install (initscript classpath)
 README-zh.md                 中文说明
 ```
