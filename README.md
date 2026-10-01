@@ -68,7 +68,7 @@ The same distribution serves two roles:
 - **CLI** — the `gradle-prune` binary from `installDist` does the actual
   pruning, with no Gradle daemon involved.
 
-`prune-init.gradle.kts` offers a third, plugin-free way to register a
+`prune.init.gradle.kts` offers a third, plugin-free way to register a
 build (see below).
 
 ### Ways to register builds
@@ -89,7 +89,7 @@ Every build run of that project refreshes its registry entry. Apply it to
 every project whose dependencies you want counted in the union.
 
 **B. Init script (zero-build-file approach).** Apply
-[`prune-init.gradle.kts`](prune-init.gradle.kts) with `-I` — a
+[`prune.init.gradle.kts`](prune.init.gradle.kts) with `-I` — a
 self-contained Kotlin-DSL mirror of the plugin's registrar: it hooks the
 same `afterResolve` callbacks (project + buildscript configurations) and
 writes the same registry file at `buildFinished`. No plugin classes are
@@ -97,7 +97,7 @@ loaded, no build file changes needed, and it never forces resolution of a
 configuration the build didn't already resolve:
 
 ```bash
-gradle -I /path/to/prune-init.gradle.kts build
+gradle -I /path/to/prune.init.gradle.kts build
 # optional: -Dgradle.prune.registry.dir=/some/dir overrides the registry location
 ```
 
@@ -117,16 +117,25 @@ semantics. Both locations work (verified on Gradle 9.7.1):
 ```bash
 # a) the init.d/ directory (recommended — coexists with other init files):
 mkdir -p ~/.gradle/init.d
-cp /path/to/prune-init.gradle.kts ~/.gradle/init.d/gradle-prune-init.gradle.kts
+cp /path/to/prune.init.gradle.kts ~/.gradle/init.d/gradle-prune.init.gradle.kts
 # b) a single root file — a bare ~/.gradle/init.gradle.kts at the root of
 #    the Gradle user home is also auto-loaded for every build (only if you
 #    have no other root init file, or it conflicts with one):
-cp /path/to/prune-init.gradle.kts ~/.gradle/init.gradle.kts
+cp /path/to/prune.init.gradle.kts ~/.gradle/init.gradle.kts
 # then restart daemons: gradle --stop
 ```
 
 Notes:
 
+- **Keep the `.init.gradle.kts` suffix.** Gradle derives a Kotlin script's
+  kind from its file name: only `init.gradle.kts` and `*.init.gradle.kts`
+  are init scripts, and anything else (e.g. `gradle-prune-init.gradle.kts`)
+  falls through to the `*.gradle.kts` project-script match. The build itself
+  still works — `init.d/` is scanned by directory — but an IDE's script-model
+  build then compiles the file as a project build script and reports
+  `Unresolved reference 'initscript'` (plus unresolved references for the
+  block's contents and imports) for it. Verified on Gradle 9.7.1; renaming
+  the file is the whole fix.
 - `init.d/` is a **directory** that Gradle scans automatically; a bare
   `~/.gradle/init.gradle` / `init.gradle.kts` at the root of the Gradle user
   home is **also** loaded automatically.
@@ -149,9 +158,13 @@ entry and no duplicated init-script capture code:
 gradle publishToMavenLocal
 # then install the global init script:
 mkdir -p ~/.gradle/init.d
-cp /path/to/prune-global-init.gradle.kts ~/.gradle/init.d/
+cp /path/to/prune-global.init.gradle.kts \
+   ~/.gradle/init.d/gradle-prune.init.gradle.kts
 gradle --stop
 ```
+
+(Keep the `.init.gradle.kts` suffix on the installed file, or the IDE
+reports unresolved references for it — see the naming note in B.)
 
 Mechanics: the script's top-level `initscript {}` block puts the plugin jar
 (from `mavenLocal()`, transitive dependencies from `mavenCentral()`) on the
@@ -299,8 +312,8 @@ src/main/kotlin/io/github/qie2035/gradleprune/
     CaptureRegistrar.kt      hooks buildFinished → registry upsert
     PruneGradleCacheTask.kt  gradlePruneModules
     PruneVersionCachesTask.kt gradlePruneVersionCaches
-prune-init.gradle.kts        -I init-script registration (Kotlin DSL;
+prune.init.gradle.kts        -I init-script registration (Kotlin DSL;
                              see its header for compiler workarounds)
-prune-global-init.gradle.kts global plugin install (initscript classpath)
+prune-global.init.gradle.kts global plugin install (initscript classpath)
 README-zh.md                 中文说明
 ```

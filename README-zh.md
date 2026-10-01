@@ -59,9 +59,9 @@ gradle installDist    # → build/install/gradle-prune-plugin/bin/gradle-prune-p
   `mavenLocal()` 后用 `pluginManagement` 引入）；
 - **CLI**：`installDist` 产出的 `gradle-prune-plugin` 可执行文件执行真正的
   清理，不经过 Gradle 守护进程；
-- **init script**：`prune-init.gradle.kts` 提供一种完全不用插件的登记方式
+- **init script**：`prune.init.gradle.kts` 提供一种完全不用插件的登记方式
   （见下文；它同样支持全局安装，还有把插件本身全局加载的
-  `prune-global-init.gradle.kts` 脚本）。
+  `prune-global.init.gradle.kts` 脚本）。
 
 ### 登记方式
 
@@ -81,14 +81,14 @@ plugins { id("io.github.qie2035.gradle-prune") }
 此插件（多项目可用 `subprojects { apply(plugin = "io.github.qie2035.gradle-prune") }`）。
 
 **B. init script（零构建脚本改动）。** 用 `-I` 应用
-[`prune-init.gradle.kts`](prune-init.gradle.kts) —— 它是插件注册器的
+[`prune.init.gradle.kts`](prune.init.gradle.kts) —— 它是插件注册器的
 自包含 Kotlin DSL 镜像：钩住同样的 `afterResolve` 回调（每个 project +
 各自 buildscript 的 configuration），在 `buildFinished` 写同一个注册表
 文件。不加载任何插件类、不改构建脚本，也绝不会强制解析构建本来不解析
 的配置：
 
 ```bash
-gradle -I /path/to/prune-init.gradle.kts build
+gradle -I /path/to/prune.init.gradle.kts build
 # 可选: -Dgradle.prune.registry.dir=/some/dir 覆盖注册表位置
 ```
 
@@ -106,15 +106,23 @@ receiver/属性技巧——完整列表见文件头注释。登记内容与插�
 ```bash
 # a) init.d/ 目录（推荐——与其他 init 文件共存）：
 mkdir -p ~/.gradle/init.d
-cp /path/to/prune-init.gradle.kts ~/.gradle/init.d/gradle-prune-init.gradle.kts
+cp /path/to/prune.init.gradle.kts ~/.gradle/init.d/gradle-prune.init.gradle.kts
 # b) 单个根文件——~/.gradle/ 根下的 init.gradle.kts 同样会被自动加载
 #    （仅当没有其他根 init 文件，或与其不冲突时）：
-cp /path/to/prune-init.gradle.kts ~/.gradle/init.gradle.kts
+cp /path/to/prune.init.gradle.kts ~/.gradle/init.gradle.kts
 # 然后重启守护进程：gradle --stop
 ```
 
 注意：
 
+- **安装后的文件名必须保留 `.init.gradle.kts` 后缀。** Gradle 依据文件名
+  判定 Kotlin 脚本的种类：只有 `init.gradle.kts` 和 `*.init.gradle.kts` 是
+  init script，其他名字（如 `gradle-prune-init.gradle.kts`）会落到
+  `*.gradle.kts` 的「项目构建脚本」匹配上。构建本身照常工作（`init.d/`
+  是按目录扫描的），但 IDE 的 script model 构建会把该文件当作项目构建脚本
+  编译，于是为它报出 `Unresolved reference 'initscript'`，以及块内
+  `classpath` 与插件 import 的未解析引用。已在 Gradle 9.7.1 上复现验证；
+  改名即可修复。
 - `init.d/` 是一个**目录**，Gradle 会自动扫描其中所有脚本；直接放在
   `~/.gradle/` 根下的单个 `init.gradle` / `init.gradle.kts` **同样会被
   自动加载**（两种位置都生效，已在 Gradle 9.7.1 上实测验证）。
@@ -134,9 +142,13 @@ cp /path/to/prune-init.gradle.kts ~/.gradle/init.gradle.kts
 gradle publishToMavenLocal
 # 然后安装全局 init 脚本：
 mkdir -p ~/.gradle/init.d
-cp /path/to/prune-global-init.gradle.kts ~/.gradle/init.d/
+cp /path/to/prune-global.init.gradle.kts \
+   ~/.gradle/init.d/gradle-prune.init.gradle.kts
 gradle --stop
 ```
+
+（安装后的文件名要保留 `.init.gradle.kts` 后缀，否则 IDE 会对它报未解析
+引用——详见 B 中的命名说明。）
 
 原理：脚本顶层的 `initscript {}` 块把插件 jar（来自 `mavenLocal()`，
 传递依赖来自 `mavenCentral()`）放进 init 脚本自己的 classpath——插件类
@@ -288,8 +300,8 @@ src/main/kotlin/io/github/qie2035/gradleprune/
     CaptureRegistrar.kt      钩住 buildFinished → 注册表 upsert
     PruneGradleCacheTask.kt  gradlePruneModules
     PruneVersionCachesTask.kt gradlePruneVersionCaches
-prune-init.gradle.kts        -I init-script 登记（Kotlin DSL；头注释列出
+prune.init.gradle.kts        -I init-script 登记（Kotlin DSL；头注释列出
                              编译所需的工作区技巧）
-prune-global-init.gradle.kts 插件全局安装（initscript classpath）
+prune-global.init.gradle.kts 插件全局安装（initscript classpath）
 README.md                    英文说明
 ```

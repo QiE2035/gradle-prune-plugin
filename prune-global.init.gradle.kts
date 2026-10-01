@@ -1,5 +1,5 @@
 /*
- * prune-global-init.gradle.kts — global plugin install for gradle-prune.
+ * prune-global.init.gradle.kts — global plugin install for gradle-prune.
  *
  * Makes the io.github.qie2035.gradle-prune PLUGIN itself load globally:
  * every build on this machine automatically
@@ -29,10 +29,21 @@
  * Install (pick ONE — both locations are auto-loaded):
  *   a) init.d directory (recommended — coexists with other init files):
  *      mkdir -p ~/.gradle/init.d
- *      cp /path/to/prune-global-init.gradle.kts ~/.gradle/init.d/
+ *      cp /path/to/prune-global.init.gradle.kts \
+ *         ~/.gradle/init.d/gradle-prune.init.gradle.kts
  *   b) single root init file, if ~/.gradle has none yet:
- *      cp /path/to/prune-global-init.gradle.kts ~/.gradle/init.gradle.kts
+ *      cp /path/to/prune-global.init.gradle.kts ~/.gradle/init.gradle.kts
  *   Then restart daemons: gradle --stop
+ *
+ * The installed file name MUST end in `.init.gradle.kts` (or be exactly
+ * `init.gradle.kts`). Gradle derives a Kotlin script's kind from its file
+ * name: only `init.gradle.kts` and `*.init.gradle.kts` are init scripts,
+ * while e.g. `foo-init.gradle.kts` falls through to the `*.gradle.kts`
+ * project-script match. Builds still work (init.d is scanned by directory),
+ * but the IDE's script-model build then compiles this file as a project
+ * build script and reports `Unresolved reference 'initscript'`, an
+ * unresolved plugin import and an unresolved `classpath` for it — verified
+ * on Gradle 9.7.1. Renaming the file is the whole fix.
  *
  * Uninstall: remove the file, then `gradle --stop`.
  *

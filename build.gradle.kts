@@ -40,4 +40,4 @@ tasks.test {
 }
 
 // maven-publish + java (via java-gradle-plugin) auto-creates a `mavenJava`
-// publication; consumed by prune-global-init.gradle via mavenLocal().
+// publication; consumed by prune-global.init.gradle.kts via mavenLocal().

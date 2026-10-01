@@ -1,4 +1,4 @@
-// prune-init.gradle.kts — init-script registration for gradle-prune.
+// prune.init.gradle.kts — init-script registration for gradle-prune.
 //
 // Semantics (identical to what the plugin's CaptureRegistrar does):
 //
@@ -11,7 +11,7 @@
 //   - never breaks the build: every hook is try/catch-ed, failures only log.
 //
 // Usage:
-//   gradle -I /path/to/prune-init.gradle.kts build
+//   gradle -I /path/to/prune.init.gradle.kts build
 //        [-Dgradle.prune.registry.dir=/custom/registry/dir]
 //
 // Global install (auto-registration for every build): the same file can be
@@ -19,12 +19,19 @@
 // configuration needed. Both locations work (verified on Gradle 9.7.1):
 //   a) the init.d/ directory (recommended — coexists with other files):
 //      mkdir -p ~/.gradle/init.d
-//      cp /path/to/prune-init.gradle.kts ~/.gradle/init.d/gradle-prune-init.gradle.kts
+//      cp /path/to/prune.init.gradle.kts ~/.gradle/init.d/gradle-prune.init.gradle.kts
 //   b) a single root file — a bare ~/.gradle/init.gradle.kts at the root of
 //      the Gradle user home is auto-loaded for every build as well
 //      (use it only if you have no other root init file):
-//      cp /path/to/prune-init.gradle.kts ~/.gradle/init.gradle.kts
+//      cp /path/to/prune.init.gradle.kts ~/.gradle/init.gradle.kts
 //   Uninstall by removing the file, then `gradle --stop`.
+//
+// The installed file name MUST end in `.init.gradle.kts` (or be exactly
+// `init.gradle.kts`): Gradle derives a Kotlin script's kind from its file
+// name, so `foo-init.gradle.kts` is classified as a project build script.
+// Builds still work (init.d is scanned by directory), but the IDE's
+// script-model build then compiles the file without the init-script
+// template and reports unresolved references for it (Gradle 9.7.1).
 //
 // Kill switch: set GRADLE_PRUNE_DISABLE (1/true/yes/on) as an environment
 // variable, or -Dgradle.prune.skip=true, to turn this script into a
