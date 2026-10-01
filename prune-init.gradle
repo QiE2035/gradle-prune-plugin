@@ -1,0 +1,138 @@
+/*
+ * prune-init.gradle — init-script registration for gradle-prune.
+ *
+ * A self-contained, plugin-free way to register a build's resolved modules
+ * in the gradle-prune registry. It mirrors the CaptureRegistrar of the
+ * `io.github.qie2035.gradle-prune` plugin:
+ *
+ *   - hooks `incoming.afterResolve` on every resolvable configuration of
+ *     every project (root + subprojects) and on each project's buildscript
+ *     configurations (plugin dependencies);
+ *   - never forces resolution of anything the build didn't already resolve;
+ *   - merges the collected `group:name:version` coordinates into
+ *     <registryDir>/<sha1(buildRoot)[0..11]>.json at buildFinished
+ *     (success or failure), conservatively: union of modules, max lastSeen,
+ *     atomic temp-file + rename;
+ *   - never breaks the build: every hook is try/catch-ed, failures only log.
+ *
+ * Usage:
+ *   gradle -I /path/to/prune-init.gradle build
+ *   gradle -I /path/to/prune-init.gradle build \
+ *        -Dgradle.prune.registry.dir=/custom/registry/dir
+ *
+ * The init script is Groovy on purpose: Kotlin init scripts get compiled in a
+ * restricted environment where the Gradle `tasks`/`configurations` receivers
+ * are not available.
+ */
+
+// Shared state: coordinates seen so far in this build (script-scoped).
+def resolvedModules = new LinkedHashSet<String>()
+
+// Registry directory: -Dgradle.prune.registry.dir > <GRADLE_USER_HOME>/prune/registry.
+// gradle.gradleUserHomeDir is the effective user home Gradle actually uses
+// (honours $GRADLE_USER_HOME, -Dgradle.user.home, the gradle.properties file
+// and the ~/.gradle default) — re-deriving it by hand is error-prone.
+def registryDirFile = {
+    def explicit = System.getProperty('gradle.prune.registry.dir')
+    if (explicit) {
+        return new File(explicit)
+    }
+    return new File(gradle.gradleUserHomeDir, 'prune/registry')
+}
+
+// Record one resolution result into the shared set (never throws).
+def recordResult = { result, logger ->
+    try {
+        // Groovy-closure overload of ResolutionResult#allDependencies(Action).
+        result.allDependencies { dep ->
+            if (dep instanceof org.gradle.api.artifacts.result.ResolvedDependencyResult) {
+                def id = dep.selected.id
+                if (id instanceof org.gradle.api.artifacts.component.ModuleComponentIdentifier) {
+                    // ModuleComponentIdentifier exposes getGroup()/getModule()/getVersion().
+                    resolvedModules.add("${id.group}:${id.module}:${id.version}")
+                }
+            }
+        }
+    } catch (Throwable t) {
+        logger.debug("gradle-prune: capture failed: ${t.message}")
+    }
+}
+
+allprojects { p ->
+    // Buildscript classpath (plugin dependencies resolve here).
+    p.buildscript.configurations.all { conf ->
+        if (conf.canBeResolved) {
+            conf.incoming.afterResolve { deps ->
+                recordResult(deps.resolutionResult, p.logger)
+            }
+        }
+    }
+    // The project's own configurations.
+    p.configurations.all { conf ->
+        if (conf.canBeResolved) {
+            conf.incoming.afterResolve { deps ->
+                recordResult(deps.resolutionResult, p.logger)
+            }
+        }
+    }
+}
+
+gradle.buildFinished { result ->
+    try {
+        def modules = resolvedModules.toList()
+        if (modules.isEmpty()) return
+
+        def buildRoot = rootProject.projectDir.absolutePath
+        def dir = registryDirFile()
+        dir.mkdirs()
+        def digest = java.security.MessageDigest.getInstance('SHA-1')
+            .digest(buildRoot.bytes)
+        def key = digest.collect { String.format('%02x', it) }.join('').take(12)
+        def target = new File(dir, "${key}.json")
+
+        // Merge with any existing entry (conservative union, as in the plugin).
+        def old = null
+        if (target.isFile()) {
+            try {
+                old = new groovy.json.JsonSlurper().parseText(target.text)
+            } catch (Throwable ignored) {
+                old = null
+            }
+        }
+        def merged = new LinkedHashSet<String>()
+        if (old?.modules instanceof List) {
+            merged.addAll(old.modules)
+        }
+        merged.addAll(modules)
+        def lastSeen = System.currentTimeMillis()
+        if (old?.lastSeen instanceof Number) {
+            lastSeen = Math.max(lastSeen, old.lastSeen.longValue())
+        }
+        def gradleVersion = gradle.gradleVersion
+        if (!gradleVersion && old?.gradleVersion) {
+            gradleVersion = old.gradleVersion
+        }
+
+        // Compact JSON is fine: the reader (kotlinx-serialization) is lenient.
+        def json = groovy.json.JsonOutput.toJson([
+            buildRoot    : buildRoot,
+            lastSeen     : lastSeen,
+            gradleVersion: gradleVersion,
+            modules      : new ArrayList<String>(merged),
+        ])
+
+        def tmp = new File(dir, "${target.name}.tmp-${ProcessHandle.current().pid()}")
+        tmp.text = json
+        java.nio.file.Files.move(
+            tmp.toPath(),
+            target.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+        )
+        tmp.delete()
+        rootProject.logger.debug(
+            "gradle-prune: recorded ${merged.size()} modules for build root $buildRoot",
+        )
+    } catch (Throwable t) {
+        rootProject.logger.warn("gradle-prune: failed to write module registry: ${t.message}")
+    }
+}
