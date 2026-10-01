@@ -71,15 +71,12 @@ initscript {
 
 // Kill switch: env GRADLE_PRUNE_DISABLE (1/true/yes/on) or
 // -Dgradle.prune.skip=true turns this script into a complete no-op.
-fun pruneEnabled(): Boolean {
-    val env = System.getenv("GRADLE_PRUNE_DISABLE")
-    if (env != null && env.lowercase() in listOf("1", "true", "yes", "on")) {
-        return false
-    }
-    return System.getProperty("gradle.prune.skip")?.lowercase() !in listOf("true", "1")
-}
+val pruneEnabled = !(
+    System.getenv("GRADLE_PRUNE_DISABLE")?.lowercase() in listOf("1", "true", "yes", "on") ||
+        System.getProperty("gradle.prune.skip")?.lowercase() in listOf("true", "1")
+)
 
-if (pruneEnabled()) {
+if (pruneEnabled) {
     try {
         // Explicit Class<Plugin<*>?> so the Java
         // PluginManager.apply(Class<out Plugin<*>>) overload is selected.
